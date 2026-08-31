@@ -1,0 +1,12 @@
+[Unit]
+Description=DARWIN strategy foundry heartbeat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# adjust WorkingDirectory + ExecStart python to your install path
+WorkingDirectory=/opt/darwin
+ExecStart=/usr/bin/python3 /opt/darwin/orchestrator.py
+EnvironmentFile=/etc/darwin.env
+TimeoutStartSec=900

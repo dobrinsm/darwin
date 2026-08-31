@@ -1,0 +1,10 @@
+# runtime state — never commit
+data/*.db
+data/*.db-*
+data/*.json
+data/*.jsonl
+runs/
+specs/*.json
+.env
+__pycache__/
+*.pyc
