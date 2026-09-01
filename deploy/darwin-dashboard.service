@@ -1,0 +1,15 @@
+[Unit]
+Description=DARWIN dashboard server (localhost only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m darwin.dashboard --serve --port 8787
+WorkingDirectory=/root/darwin
+EnvironmentFile=/root/.hermes/.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

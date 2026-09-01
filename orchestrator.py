@@ -99,6 +99,14 @@ def main():
     except Exception as e:
         log(f"arena FAILED: {e}\n{traceback.format_exc()[-400:]}")
 
+    # Phase E — dashboard rebuild (cheap; served separately on 127.0.0.1:8787)
+    try:
+        from darwin.dashboard import build
+        p = build()
+        log(f"dashboard: {p.name} rebuilt")
+    except Exception as e:
+        log(f"dashboard FAILED: {e}\n{traceback.format_exc()[-400:]}")
+
     # heartbeat
     log(f"bus total: {bus._count()} events")
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=DARWIN dashboard Cloudflare tunnel (quick tunnel)
+After=network-online.target darwin-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://127.0.0.1:8787 --no-autoupdate
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
