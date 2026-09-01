@@ -116,6 +116,31 @@ def collect_binance(bus: EventBus, lookback_bars: int = 5) -> int:
     return bus.publish(events)
 
 
+# ---------------------------------------------------------------- Binance funding
+def collect_funding(bus: EventBus) -> int:
+    """Perps funding rates (public fapi, no key). Keeps the tail fresh; full
+    history lives in backfill.backfill_funding(). Every event is a funding
+    settlement fact: (symbol, fundingTime, rate)."""
+    events = []
+    for sym in BINANCE_SYMBOLS:
+        rows = _get(f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={sym}&limit=100")
+        for r in rows:
+            fts = float(r["fundingTime"]) / 1000.0
+            if fts > _now():
+                continue
+            try:
+                rate = float(r["fundingRate"])
+            except (TypeError, ValueError):
+                continue
+            events.append(Event(
+                "binance", "funding", fts,
+                {"symbol": sym, "interval": "8h", "rate": rate,
+                 "mark_price": r.get("markPrice") or None},
+                f"funding:{sym}:{int(fts * 1000)}",   # ms-precision: idempotent
+                symbols=[sym.replace("USDT", "")]))
+    return bus.publish(events)
+
+
 # ---------------------------------------------------------------- LSE
 def collect_lse(bus: EventBus, symbols: list[str] | None = None,
                 timeframes: tuple[str, ...] = ("1d",)) -> int:
@@ -267,6 +292,7 @@ def collect_alphasmo(bus: EventBus) -> int:
 ALL = {
     "agentservices": collect_agentservices,
     "binance": collect_binance,
+    "funding": collect_funding,
     "wsb": collect_wsb,
     "lse": collect_lse,
     "finlight": collect_finlight,

@@ -136,11 +136,57 @@ def backfill_lse(bus: EventBus, start: str = "2023-01-01") -> int:
     return total
 
 
+def backfill_funding(bus: EventBus, symbols=None) -> int:
+    """USDT-M perps funding rate history from listing (free fapi, no key).
+    Paged 1000 records/call backwards is not supported by the endpoint, so we
+    page forward with startTime. Idempotent via UNIQUE(source, dedup_key)."""
+    symbols = symbols or BINANCE_SYMBOLS
+    start_ms = int(datetime.fromisoformat(HIST_START)
+                   .replace(tzinfo=timezone.utc).timestamp() * 1000)
+    total = 0
+    for sym in symbols:
+        end_ms = start_ms
+        while True:
+            url = (f"https://fapi.binance.com/fapi/v1/fundingRate?symbol={sym}"
+                   f"&startTime={end_ms}&limit=1000")
+            rows = None
+            for attempt in range(4):   # 429/5xx: back off and retry
+                try:
+                    rows = _get_json(url)
+                    break
+                except Exception:
+                    time.sleep(2.0 * (attempt + 1))
+            if not isinstance(rows, list) or not rows:
+                break  # error dict, exhausted retries, or exhausted history
+            events = []
+            for r in rows:
+                fts = float(r["fundingTime"]) / 1000.0
+                if fts > time.time():
+                    continue
+                try:
+                    rate = float(r["fundingRate"])
+                except (TypeError, ValueError):
+                    continue
+                events.append(Event(
+                    "binance", "funding", fts,
+                    {"symbol": sym, "interval": "8h", "rate": rate,
+                     "mark_price": r.get("markPrice") or None},
+                    f"funding:{sym}:{int(fts * 1000)}",
+                    symbols=[sym.replace("USDT", "")]))
+            total += bus.publish(events)
+            if len(rows) < 1000:
+                break
+            end_ms = int(float(rows[-1]["fundingTime"])) + 1
+            time.sleep(0.35)   # fapi weight budget: 1 request ≈ 1 weight
+    return total
+
+
 def run_all(bus: EventBus | None = None) -> dict:
     bus = bus or EventBus()
     out = {}
     t0 = time.time()
     out["binance_klines"] = backfill_binance(bus)
+    out["funding"] = backfill_funding(bus)
     out["fear_greed"] = backfill_fear_greed(bus)
     out["wsb"] = backfill_wsb(bus)
     try:

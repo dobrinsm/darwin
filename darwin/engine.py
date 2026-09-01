@@ -16,7 +16,12 @@ import pandas as pd
 from .bus import EventBus
 from .spec_schema import NODE_TYPES
 
-FEE = 0.0005  # Binance taker per side, on notional
+FEE = 0.0005          # Binance taker per side, on notional
+SLIPPAGE_BPS = 2.0    # adverse fill per side on notional (liquid top-slice)
+# Safety net when the bus has no funding history for the symbol. Binance perps
+# cap the rate at +/-0.75%/8h (clamps apply); 12% APR longs-pay is the
+# conservative base case for trend backtests.
+FUNDING_DEFAULT_APR = 0.12
 
 TS_COLUMNS = ["open", "high", "low", "close", "volume"]
 
@@ -80,6 +85,18 @@ def _news_sentiment_series(bus: EventBus, ticker: str) -> pd.DataFrame:
     return df.sort_index()
 
 
+def _funding_rate_series(bus: EventBus, symbol: str) -> pd.Series:
+    """Realized perp funding rates (fraction per 8h settlement), indexed by
+    funding time (UTC). Point-in-time: a settlement is 'known' at its time."""
+    evs = bus.read(event_type="funding", source="binance",
+                   symbol=symbol.replace("USDT", ""), limit=10_000_000)
+    if not evs:
+        return pd.Series(dtype=float)
+    idx = pd.to_datetime([e.ts for e in evs], unit="s", utc=True)
+    s = pd.Series([float(e.payload.get("rate") or 0.0) for e in evs], index=idx)
+    return s[~s.index.duplicated()].sort_index()
+
+
 def _convergence_series(bus: EventBus) -> pd.DataFrame:
     evs = bus.read(event_type="convergence", limit=1_000_000)
     if not evs:
@@ -131,12 +148,14 @@ class Context:
         self.wsb = _wsb_rank_series(bus, symbol.replace("USDT", ""))
         self.news = _news_sentiment_series(bus, symbol.replace("USDT", ""))
         self.conv = _convergence_series(bus)
+        self.funding = _funding_rate_series(bus, symbol)
         # track which data sources were actually present in-range (for UNTESTABLE)
         self.sources_present = {
             "fear_greed": len(self.fg) > 0,
             "wsb": len(self.wsb) > 0,
             "news": len(self.news) > 0,
             "convergence": len(self.conv) > 0,
+            "funding": len(self.funding) > 0,
         }
 
     def tf_df(self, tf: str) -> pd.DataFrame:
@@ -289,14 +308,26 @@ def compile_signal(spec: dict, df: pd.DataFrame, ctx: Context) -> tuple[pd.Serie
 
 # ---------------------------------------------------------------- simulation
 def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
-             exit_sig: pd.Series) -> tuple[pd.Series, pd.DataFrame]:
+             exit_sig: pd.Series, ctx: "Context | None" = None
+             ) -> tuple[pd.Series, pd.DataFrame]:
     """Long-only position state machine. Deterministic, no lookahead:
-    signal known at close of bar t -> position held over bar t+1's return."""
+    signal known at close of bar t -> position held over bar t+1's return.
+    Costs: FEE (taker, per side) + SLIPPAGE_BPS per side, plus realized
+    funding settlements charged every bar the position is held (longs pay
+    positive rates). Funding uses actual Binance history when a Context is
+    provided; otherwise the FUNDING_DEFAULT_APR safety net."""
     lev = spec["risk"]["leverage"]
     max_frac = spec["risk"]["max_pos_frac"]
     cooldown = spec["risk"].get("cooldown_bars", 0)
     trail = (spec.get("exit", {}).get("stops") or {}).get("trail_pct")
     hard = (spec.get("exit", {}).get("stops") or {}).get("hard_pct")
+
+    # --- funding: actual history if available, else conservative default ---
+    if ctx is not None and getattr(ctx, "funding", None) is not None \
+            and len(ctx.funding) > 0:
+        fnd = ctx.funding.reindex(df.index, method="ffill").fillna(0.0)
+    else:
+        fnd = pd.Series(FUNDING_DEFAULT_APR / 365.0 / 3.0, index=df.index)
 
     pos = np.zeros(len(df))
     state = 0
@@ -305,6 +336,7 @@ def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
     peak = np.nan
     rets = df["close"].pct_change().fillna(0.0).to_numpy()
     closes = df["close"].to_numpy()
+    fund = fnd.to_numpy()
 
     for i in range(len(df)):
         if state == 0:
@@ -329,12 +361,20 @@ def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
     # act on next bar's return; notional = pos*lev capped at 0.9 equity
     notional = (pos_s.shift(1).fillna(0.0) * lev).clip(upper=0.9)
     gross = notional * rets
-    fees = notional.diff().abs().fillna(notional.iloc[0] * (notional.iloc[0] > 0)) * FEE
-    net = gross - fees
+    turn = notional.diff().abs()
+    turn.iloc[0] = turn.iloc[0] if not pd.isna(turn.iloc[0]) else \
+        notional.iloc[0] * (notional.iloc[0] > 0)
+    fees = turn * (FEE + SLIPPAGE_BPS / 1e4)
+    # funding accrues on notional every bar held (long pays positive rate).
+    # Held-notional = notional of bar t+1, matching the return the funding
+    # settles against; on 1d bars 3 settlements accrue per bar, on 4h 1/2.
+    settles_per_bar = {"1d": 3.0, "4h": 0.5}[spec["asset"]["tf"]]
+    funding_cost = notional * fund * settles_per_bar
+    net = gross - fees - funding_cost
     trades_mask = pos_s.diff().abs() > 0
     return net, pd.DataFrame({
         "position": pos_s, "notional": notional, "ret": rets, "net": net,
-        "trade": trades_mask,
+        "fees": fees, "funding_cost": funding_cost, "trade": trades_mask,
     })
 
 

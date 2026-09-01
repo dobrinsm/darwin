@@ -8,6 +8,8 @@ paper-trades only the survivors.
 LOOP 0  INGEST      heterogeneous feeds → point-in-time SQLite event bus
 LOOP 1  MINE        LLM cross-reads the bus → proposes strategy SPECS (pure JSON)
 LOOP 2  GAUNTLET    walk-forward backtest of every spec → PROMOTE / MUTATE / KILL
+LOOP 2.5 MUTATE    bounded param-grid search on MUTATE verdicts, same gauntlet,
+                   OOS-anchored fitness with leave-one-out lucky-window rejection
 LOOP 3  ARENA       promoted specs paper-trade in parallel on a virtual book
 YOU                 read the daily digest; the machine does the rest
 ```
@@ -44,12 +46,17 @@ DepthSight — the tools that inspired this — but none of them is a dependency
 ```
 darwin/
   bus.py          append-only SQLite event bus (dedup by source+dedup_key)
-  collectors.py   6 feed collectors: agentservices, binance, LSE, finlight,
-                  tradestie/WSB, alphasmo (via jina relay past Cloudflare)
-  backfill.py     history: binance 1d/4h to 2020, fear&greed to 2019, LSE cross-asset
+  collectors.py   7 feed collectors: agentservices, binance klines, binance
+                  funding, LSE, finlight, tradestie/WSB, alphasmo (via jina relay)
+  backfill.py     history: binance 1d/4h to 2020, perp funding to listing,
+                  fear&greed to 2019, LSE cross-asset
   spec_schema.py  the SPEC contract: JSON-schema'd node DAG, strict param ranges
-  engine.py       spec compiler → vectorized point-in-time backtest
-  gauntlet.py     walk-forward judge: 12mo IS / 6mo OOS rolling windows
+  engine.py       spec compiler → point-in-time backtest (fee + slippage +
+                  realized funding on held notional)
+  gauntlet.py     walk-forward judge: 12mo IS / 6mo OOS rolling windows,
+                  leave-one-out OOS sharpe in every report
+  optimizer.py    MUTATE loop: bounded grid search per seed, OOS-anchored
+                  fitness, LOO gate, promoted children replace their parents
   miner.py        LLM mining cycle: bus snapshot → proposals → schema-validated specs
   arena.py        virtual paper book, position reconciliation, trade log
 orchestrator.py   the heartbeat (designed for systemd timer, every 15 min)
@@ -95,7 +102,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now darwin.timer darwin-
 | Source | What it provides | Auth |
 |---|---|---|
 | [AgentServices](https://agentservices.to) | fear&greed, trending, prices (free endpoints) | none |
-| [Binance](https://binance.com) | klines, the execution venue | public |
+| [Binance](https://binance.com) | klines + USDT-M perp funding history, the execution venue | public |
 | [London Strategic Edge](https://londonstrategicedge.com/data/) | 133B ticks: equities, FX, commodities, options, macro | free key |
 | [Finlight](https://finlight.me) | real-time news (sentiment scored locally via lexicon) | free key |
 | [Tradestie](https://tradestie.com/apps/reddit/api/) | WallStreetBets top-50 sentiment | none |
@@ -103,11 +110,15 @@ sudo systemctl daemon-reload && sudo systemctl enable --now darwin.timer darwin-
 
 ## Honest limits
 
-- **One champion is not proof.** +0.86 OOS Sharpe on a 6-year daily backtest is promising,
-  not significant. Real capital only after clean paper-trading months.
+- **One champion is not proof.** +0.82 OOS Sharpe (funding-adjusted) on a 6-year daily
+  backtest is promising, not significant. Real capital only after clean paper-trading months.
 - The Miner is only as honest as its prompts — the gauntlet is the actual safety net.
 - Tradestie's cert is chronically flaky; the collector degrades gracefully.
-- Fees modeled flat at 5 bps taker; no slippage or funding-rate modeling yet.
+- Costs modeled: 5 bps taker + 2 bps slippage per side, and REAL Binance funding
+  settlements charged on held notional (12% APR longs-pay fallback if history is missing).
+  Still no borrow, no liquidation-cascade fills, no latency.
+- Optimizer children face a higher arena bar (OOS sharpe ≥ 0.7 AND LOO ≥ 0.25) because
+  best-of-N search inflates the max-statistic.
 - Long-only, crypto-only (v1). `convergence`/news nodes need richer history before
   walk-forward-meaningful — the gauntlet correctly kills specs that depend on them today.
 

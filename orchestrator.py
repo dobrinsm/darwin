@@ -57,6 +57,7 @@ def main():
     need_gauntlet = do_mine or not __import__("pathlib").Path(gauntlet_flag).exists()
 
     # Phase C — gauntlet after new blood
+    gauntlet_ran = False
     if need_gauntlet:
         try:
             lines = []
@@ -66,8 +67,29 @@ def main():
                              f" oos={rep['avg_oos_sharpe']:+.2f}")
                 log(f"gauntlet: {lines[-1]}")
             open(gauntlet_flag, "w").write(day)
+            gauntlet_ran = True
         except Exception as e:
             log(f"gauntlet FAILED: {e}\n{traceback.format_exc()[-400:]}")
+
+    # Phase C2 — MUTATE optimizer (only right after fresh gauntlet verdicts)
+    if gauntlet_ran:
+        try:
+            from darwin.optimizer import run_all_mutations
+            opt = run_all_mutations(bus)
+            for r in opt["results"]:
+                if r.get("child"):
+                    log(f"optimizer: {r['seed_id']} -> {r['child']}"
+                        f" oos={r['child_avg_oos_sharpe']:+.2f}"
+                        f" comp={r['child_oos_compound_pct']:+.1f}%"
+                        f" ({r['candidates_tested']} tested, {r['secs']}s)")
+                elif r.get("error"):
+                    log(f"optimizer: {r['seed_id']} ERROR {r['error']}")
+                else:
+                    log(f"optimizer: {r['seed_id']} no improvement"
+                        f" ({r.get('candidates_tested', 0)} tested, {r['secs']}s)")
+            log(f"optimizer: {len(opt['children'])}/{opt['seeds']} seeds improved")
+        except Exception as e:
+            log(f"optimizer FAILED: {e}\n{traceback.format_exc()[-400:]}")
 
     # Phase D — arena
     try:

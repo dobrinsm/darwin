@@ -23,6 +23,13 @@ START_EQ = 10_000.0
 # promoted = verdict PROMOTE and not older than STALE_HOURS
 STALE_HOURS = 36
 
+# Best-of-N search inflates the max-statistic: an optimizer child must clear a
+# higher OOS bar than an organic spec before it's trusted in the arena — both
+# on the headline average AND on leave-one-out robustness (edge must not live
+# in its single best window).
+OPT_CHILD_MIN_SHARPE = 0.7
+OPT_CHILD_MIN_LOO = 0.25
+
 
 def promoted_specs() -> list[dict]:
     out = []
@@ -32,9 +39,15 @@ def promoted_specs() -> list[dict]:
         if not rep_p.exists():
             continue
         rep = json.loads(rep_p.read_text())
-        if rep.get("verdict") == "PROMOTE" and now - rep.get("ran_at", 0) < STALE_HOURS * 3600:
-            s = load_spec(p.stem)
-            out.append(s)
+        if rep.get("verdict") != "PROMOTE" or now - rep.get("ran_at", 0) >= STALE_HOURS * 3600:
+            continue
+        prov = (load_spec(p.stem).get("provenance") or {})
+        if prov.get("model") == "optimizer-grid-v1" and (
+                rep.get("avg_oos_sharpe", 0) < OPT_CHILD_MIN_SHARPE
+                or rep.get("oos_loo_sharpe", 0) < OPT_CHILD_MIN_LOO):
+            continue
+        s = load_spec(p.stem)
+        out.append(s)
     return out
 
 
@@ -67,7 +80,7 @@ def step(bus: EventBus | None = None) -> dict:
             df = load_klines(bus, sym, tf)
             ctx = Context(bus, sym, tf, df.index)
             e_sig, x_sig, gaps = compile_signal(spec, df, ctx)
-            net, frame = simulate(spec, df, e_sig, x_sig)
+            net, frame = simulate(spec, df, e_sig, x_sig, ctx)
         except Exception as e:
             actions.append({"spec_id": sid, "error": str(e)[:120]})
             continue
@@ -99,6 +112,8 @@ def step(bus: EventBus | None = None) -> dict:
     for sid in list(state):
         if sid not in live and state[sid].get("in_pos"):
             state[sid]["in_pos"] = 0
+            _log_trade({"ts": time.time(), "spec_id": sid, "action": "RETIRED",
+                        "note": "spec left promoted set while holding a paper position"})
     _save_state(state)
     return {"actions": actions,
             "positions": {k: v for k, v in state.items() if v.get("in_pos")}}
