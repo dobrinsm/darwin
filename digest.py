@@ -59,7 +59,9 @@ def main():
         for t in recent:
             px = t.get("px", "?")
             extra = f" pnl {t['pnl_usd']:+.2f}" if "pnl_usd" in t else ""
-            lines.append(f"  {t['action']} {t['symbol']} @ {px}{extra}")
+            note = f" — {t['note']}" if t.get("note") else ""
+            lines.append(f"  {t.get('action', '?')} {t.get('symbol', '?')}"
+                         f" @ {px}{extra}{note}")
 
     # freshest miner theses (last 2 days)
     log_p = DATA / "miner_log.jsonl"
