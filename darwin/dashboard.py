@@ -209,10 +209,10 @@ def render(snap: dict) -> str:
 <tr>
  <td class="mono">{time.strftime('%m-%d %H:%M', time.gmtime(t.get('ts', 0)))}</td>
  <td class="mono">{_esc(t.get('spec_id', ''))}</td>
- <td>{_esc(t.get('action', ''))}</td>
+ <td>{_esc(t.get('action', ''))}{f" <span class='warn'>{_esc(t.get('reason'))}</span>" if t.get('reason') else ''}</td>
  <td>{_esc(t.get('symbol') or '')}</td>
  <td class="num">{_esc(t.get('px', ''))}</td>
- <td class="num">{_fmt(t.get('pnl_usd'), 2, True) if 'pnl_usd' in t else ''}</td>
+ <td class="num">{_fmt(t.get('pnl_usd') or t.get('pnl_net'), 2, True) if ('pnl_usd' in t or 'pnl_net' in t) else ''}</td>
 </tr>""" for t in snap["trades"])
 
     opt_rows = "".join(f"""

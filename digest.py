@@ -58,10 +58,15 @@ def main():
                   if l.strip() and json.loads(l).get("ts", 0) > day_ago]
         for t in recent:
             px = t.get("px", "?")
-            extra = f" pnl {t['pnl_usd']:+.2f}" if "pnl_usd" in t else ""
+            extra = ""
+            if "pnl_usd" in t:
+                extra = f" pnl {t['pnl_usd']:+.2f}"
+            elif "pnl_net" in t:
+                extra = f" pnl {t['pnl_net']:+.2f}"
             note = f" — {t['note']}" if t.get("note") else ""
+            reason = f" [{t['reason']}]" if t.get("reason") else ""
             lines.append(f"  {t.get('action', '?')} {t.get('symbol', '?')}"
-                         f" @ {px}{extra}{note}")
+                         f" @ {px}{extra}{note}{reason}")
 
     # freshest miner theses (last 2 days)
     log_p = DATA / "miner_log.jsonl"

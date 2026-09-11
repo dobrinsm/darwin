@@ -92,6 +92,120 @@ def existing_summary() -> str:
     return "\n".join(out) or "  (none yet)"
 
 
+# ---------------------------------------------------------------- death report
+def death_report(root: Path | None = None) -> str:
+    """What the foundry has learned the hard way, for the miner's prompt.
+
+    Three evidence channels, all from on-disk state:
+    - arena outcomes: recent closed trades (net PnL + hold time) and currently
+      open positions underwater — what is failing LIVE, not in backtest
+    - frozen specs: demoted for paper-equity breach — named and shamed
+    - gauntlet KILLs: which theses are structurally dead and which OOS windows
+      killed them (the regime fingerprint of the failure)
+    Compact by construction: the prompt budget is finite.
+    """
+    root = root or Path(__file__).resolve().parent.parent
+    data, runs, specs = root / "data", root / "runs", root / "specs"
+    import time as _t
+    now = _t.time()
+    lines = []
+
+    def _name(sid: str) -> str:
+        p = specs / f"{sid}.json"
+        if p.exists():
+            try:
+                return json.loads(p.read_text()).get("name", sid)
+            except Exception:
+                return sid
+        return sid
+
+    def _spec_sym(sid: str) -> str | None:
+        """Symbol from the spec file — arena state predating the cost model
+        never stamped `symbol` on the position, hence the '?' fallbacks."""
+        p = specs / f"{sid}.json"
+        if p.exists():
+            try:
+                return json.loads(p.read_text()).get("asset", {}).get("symbol")
+            except Exception:
+                return None
+        return None
+
+    # --- live wounds: closed trades last 14d + open positions
+    trades_p = data / "arena_trades.jsonl"
+    closed = []
+    if trades_p.exists():
+        for l in trades_p.read_text().splitlines():
+            if not l.strip():
+                continue
+            t = json.loads(l)
+            if t.get("action") == "EXIT" and now - t.get("ts", 0) < 14 * 86400:
+                closed.append(t)
+    if closed:
+        lines.append("RECENT LIVE EXITS (real paper money, last 14d):")
+        for t in closed[-8:]:
+            sym = t.get("symbol") or _spec_sym(t.get("spec_id", "")) or "?"
+            lines.append(f"  - {_name(t.get('spec_id','?'))} on {sym}: "
+                         f"net {t.get('pnl_net', 0):+.0f}$ "
+                         f"(gross {t.get('pnl_gross', 0):+.0f}, "
+                         f"fees {t.get('fees_exit', 0):.0f}, "
+                         f"funding {t.get('funding', 0):+.1f})")
+
+    state_p = data / "arena_state.json"
+    if state_p.exists():
+        try:
+            st = json.loads(state_p.read_text())
+        except Exception:
+            st = {}
+        losers = [(sid, s) for sid, s in st.items()
+                  if isinstance(s, dict) and s.get("in_pos")
+                  and (s.get("unrealized") or 0) < -50]
+        if losers:
+            lines.append("OPEN POSITIONS DEEPLY UNDERWATER (held right now):")
+            for sid, s in sorted(losers, key=lambda x: x[1].get("unrealized", 0))[:5]:
+                sym = s.get("symbol") or _spec_sym(sid) or "?"
+                lines.append(f"  - {_name(sid)} on {sym}: "
+                             f"entry {s.get('entry_px')} -> mark {s.get('mark')}, "
+                             f"unrealized {s.get('unrealized', 0):+.0f}$")
+
+    # --- frozen: demoted by the arena for losing real paper money
+    frozen_p = data / "frozen_specs.json"
+    if frozen_p.exists():
+        try:
+            fr = json.loads(frozen_p.read_text())
+        except Exception:
+            fr = {}
+        if fr:
+            lines.append("FROZEN SPECS (demoted for live losses — do NOT propose "
+                         "close variants of these):")
+            for sid, meta in list(fr.items())[:6]:
+                lines.append(f"  - {_name(sid)}: {meta.get('reason','?')} "
+                             f"(equity {meta.get('equity', 0):,.0f})")
+
+    # --- structural deaths: KILL verdicts + the windows that killed them
+    kills = []
+    for p in sorted(runs.glob("*/report.json")):
+        rep = json.loads(p.read_text())
+        sid = p.parent.name
+        if not (specs / f"{sid}.json").exists():
+            continue
+        if rep.get("verdict") == "KILL":
+            wins = [round(w.get("oos", {}).get("sharpe", 0), 2)
+                    for w in (rep.get("walk_forward") or [])]
+            kills.append((rep.get("ran_at", 0), sid, rep.get("name", sid),
+                          rep.get("avg_oos_sharpe", 0), wins))
+    if kills:
+        kills.sort(key=lambda k: -k[0])
+        lines.append("STRUCTURALLY DEAD THESES (KILL verdicts, with OOS window "
+                     "sharpes — note WHICH regimes killed them):")
+        for _, sid, name, avg, wins in kills[:8]:
+            lines.append(f"  - {name} [{sid[:13]}]: avg {avg:+.2f}, "
+                         f"windows {wins}")
+
+    if not lines:
+        return "(no failure history yet — first generation)"
+    return "\n".join(lines)
+
+
 PROMPT = """You are the Miner in an autonomous trading-strategy foundry.
 Below is market state from a point-in-time event bus, the node vocabulary for
 strategy specs, and the specs that already exist.
@@ -106,6 +220,11 @@ Rules:
 - Be NOVEL vs existing specs (different asset, timeframe, or mechanism).
 - exit.any should contain the mirror of the entry mechanism.
 - Think about WHY each edge could exist (behavioral, flow, structure) and put it in provenance.thesis.
+- STUDY THE FAILURE REPORT below before proposing. Do not resubmit a thesis
+  family that already died the same way (same mechanism + same asset + similar
+  params). A death in a falling-market window with long-only entries is a hint
+  about regime sensitivity, not just bad luck — say in your thesis why YOUR
+  variant survives the regime that killed its predecessors.
 - Respond with ONLY a JSON array of specs, no markdown, no commentary.
 
 CRITICAL NODE FORMAT — every node is an object with a "type" KEY plus flat params:
@@ -132,6 +251,9 @@ NODE VOCABULARY (params in {}):
 
 EXISTING SPECS (do not duplicate):
 @@EXISTING@@
+
+FAILURE REPORT — what the foundry has already tried and lost on:
+@@DEATHS@@
 
 CURRENT MARKET STATE (point-in-time, honest):
 @@SNAPSHOT@@
@@ -188,9 +310,11 @@ def mine(bus: EventBus | None = None) -> dict:
     """One mining cycle: snapshot -> LLM -> validate -> save. Returns summary."""
     bus = bus or EventBus()
     snapshot = bus_snapshot(bus)
+    deaths = death_report()
     prompt = (PROMPT.replace("@@MAXPROPOSALS@@", str(MAX_PROPOSALS))
               .replace("@@CHEATSHEET@@", NODE_CHEATSHEET)
               .replace("@@EXISTING@@", existing_summary())
+              .replace("@@DEATHS@@", deaths)
               .replace("@@SNAPSHOT@@", snapshot))
     raw = _call_llm(prompt)
     proposals = _parse_array(raw)

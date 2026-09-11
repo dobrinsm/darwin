@@ -79,6 +79,15 @@ def unfreeze(spec_id: str) -> bool:
         return True
     return False
 
+# ---------------------------------------------------------------- book risk
+# Portfolio-level entry controls. The backtest gauntlet judges each spec in
+# isolation; the arena trades them as ONE book. Left ungated, 7 long specs on
+# SOL/BTC/XLM fire into the same dip and the "diversified" book is one bet
+# (2026-09-11: 6/7 open positions all red together). These rules are
+# deterministic and apply to NEW entries only — exits are never blocked.
+MAX_PER_SYMBOL = 2        # concurrent open positions sharing a symbol
+MAX_TOTAL_POSITIONS = 6   # concurrent open positions across the whole book
+
 # live-account cost model — single source of truth is engine.py
 COST_PER_SIDE = FEE + SLIPPAGE_BPS / 1e4
 NOTIONAL_CAP = 0.9   # engine.simulate clips notional fraction at 0.9 of equity
@@ -189,14 +198,19 @@ def _close_math(st: dict, px: float) -> dict:
 
 # ---------------------------------------------------------------- main step
 def step(bus: EventBus | None = None) -> dict:
-    """One arena cycle: reconcile desired positions for every promoted spec,
-    mark open positions to market, accrue funding."""
+    """One arena cycle: evaluate every promoted spec, then reconcile exits,
+    then fill entries under book-level risk caps (see MAX_PER_SYMBOL /
+    MAX_TOTAL_POSITIONS). Mark open positions to market, accrue funding."""
     bus = bus or EventBus()
     state = _load_state()
     actions = []
     live = {s["spec_id"]: s for s in promoted_specs()}
     now = time.time()
 
+    # ---- Phase 1: evaluate every spec -> desired position + gauntlet rank.
+    # Rank = LOO sharpe of the latest report: the book fills with the most
+    # robust specs first when caps bite, not in arbitrary filesystem order.
+    evals = []   # (loo_rank, sid, spec, sym, lev, desired, last_close, last_ts, gaps)
     for spec in live.values():
         sid = spec["spec_id"]
         sym, tf = spec["asset"]["symbol"], spec["asset"]["tf"]
@@ -209,11 +223,28 @@ def step(bus: EventBus | None = None) -> dict:
         except Exception as e:
             actions.append({"spec_id": sid, "error": str(e)[:120]})
             continue
-        desired = int(frame["position"].iloc[-1])       # what spec holds now
-        last_close = float(df["close"].iloc[-1])
-        last_ts = float(df.index[-1].timestamp())
+        rep_p = Path(__file__).resolve().parent.parent / "runs" / sid / "report.json"
+        loo_rank = 0.0
+        if rep_p.exists():
+            try:
+                loo_rank = float(json.loads(rep_p.read_text()).get("oos_loo_sharpe") or 0)
+            except Exception:
+                pass
+        evals.append((loo_rank, sid, spec, sym, lev,
+                      int(frame["position"].iloc[-1]),
+                      float(df["close"].iloc[-1]),
+                      float(df.index[-1].timestamp()),  # type: ignore[attr-defined]
+                      gaps))
+
+    # ---- Phase 2: exits + mark-to-market + funding + freeze checks.
+    # Exits are NEVER gated by book risk.
+    pending_entries = []   # (loo_rank, sid, spec, sym, lev, last_close, last_ts, gaps)
+    for loo_rank, sid, spec, sym, lev, desired, last_close, last_ts, gaps in evals:
         st = state.get(sid, {"in_pos": 0, "entry_px": None, "entry_ts": None,
                              "equity": START_EQ})
+        # backfill: positions opened before the cost model stamped no `symbol`
+        if st.get("in_pos") and not st.get("symbol"):
+            st["symbol"] = sym
 
         # ---- already in a position: mark to market + accrue funding ----
         if st.get("in_pos"):
@@ -232,9 +263,6 @@ def step(bus: EventBus | None = None) -> dict:
                 - st["coins"] * last_close * COST_PER_SIDE, 2)
 
         # ---- live demotion check: paper equity below FREEZE_EQUITY -> freeze
-        # (no new entries; position already open rides to its own exit signal).
-        # Frozen here so the spec drops out of promoted set on the NEXT tick;
-        # this tick it may still exit but cannot re-enter.
         if st.get("equity", START_EQ) < FREEZE_EQUITY:
             fr = _load_frozen()
             if sid not in fr:
@@ -247,21 +275,7 @@ def step(bus: EventBus | None = None) -> dict:
                 actions.append({"spec_id": sid, "action": "FROZEN",
                                 "equity": st["equity"]})
 
-        if desired == 1 and not st.get("in_pos"):
-            if sid in _load_frozen():
-                state[sid] = st
-                continue
-            st.update(in_pos=1, entry_px=last_close, entry_ts=last_ts,
-                      lev=lev, symbol=sym, funding_trade=0.0)
-            _init_position(st, st.get("equity", START_EQ), last_close)
-            st["mark"] = last_close
-            st["unrealized"] = round(-st["coins"] * last_close * COST_PER_SIDE, 2)
-            _log_trade({"ts": last_ts, "spec_id": sid, "name": spec["name"],
-                        "action": "ENTRY", "symbol": sym, "px": last_close,
-                        "lev": lev, "margin": MARGIN, "coins": round(st["coins"], 6),
-                        "fees": st["fees_entry"], "gaps": gaps})
-            actions.append({"spec_id": sid, "action": "ENTRY", "px": last_close})
-        elif desired == 0 and st.get("in_pos"):
+        if desired == 0 and st.get("in_pos"):
             m = _close_math(st, last_close)
             m["equity_after"] = st["equity"]
             _log_trade({"ts": last_ts, "spec_id": sid, "name": spec["name"],
@@ -270,6 +284,53 @@ def step(bus: EventBus | None = None) -> dict:
                             "pnl_usd": m["pnl_net"]})
             st.update(in_pos=0, entry_px=None, entry_ts=None, coins=None,
                       unrealized=0.0, mark=last_close)
+        elif desired == 1 and not st.get("in_pos"):
+            pending_entries.append((loo_rank, sid, spec, sym, lev,
+                                    last_close, last_ts, gaps))
+        state[sid] = st
+
+    # ---- Phase 3: entries under book-level caps, best-LOO first.
+    open_now = [s for s in state.values()
+                if isinstance(s, dict) and s.get("in_pos")]
+    n_open = len(open_now)
+    sym_count = {}
+    for s in open_now:
+        sy = s.get("symbol") or "?"
+        sym_count[sy] = sym_count.get(sy, 0) + 1
+
+    for loo_rank, sid, spec, sym, lev, last_close, last_ts, gaps in sorted(
+            pending_entries, key=lambda e: -e[0]):
+        st = state[sid]
+        if sid in _load_frozen():
+            continue
+        if n_open >= MAX_TOTAL_POSITIONS:
+            _log_trade({"ts": last_ts, "spec_id": sid, "name": spec["name"],
+                        "action": "BLOCKED", "symbol": sym, "px": last_close,
+                        "reason": f"book cap {MAX_TOTAL_POSITIONS} positions",
+                        "meta": True})
+            actions.append({"spec_id": sid, "action": "BLOCKED",
+                            "reason": "book_cap"})
+            continue
+        if sym_count.get(sym, 0) >= MAX_PER_SYMBOL:
+            _log_trade({"ts": last_ts, "spec_id": sid, "name": spec["name"],
+                        "action": "BLOCKED", "symbol": sym, "px": last_close,
+                        "reason": f"symbol cap {MAX_PER_SYMBOL} on {sym}",
+                        "meta": True})
+            actions.append({"spec_id": sid, "action": "BLOCKED",
+                            "reason": "symbol_cap", "symbol": sym})
+            continue
+        st.update(in_pos=1, entry_px=last_close, entry_ts=last_ts,
+                  lev=lev, symbol=sym, funding_trade=0.0)
+        _init_position(st, st.get("equity", START_EQ), last_close)
+        st["mark"] = last_close
+        st["unrealized"] = round(-st["coins"] * last_close * COST_PER_SIDE, 2)
+        _log_trade({"ts": last_ts, "spec_id": sid, "name": spec["name"],
+                    "action": "ENTRY", "symbol": sym, "px": last_close,
+                    "lev": lev, "margin": MARGIN, "coins": round(st["coins"], 6),
+                    "fees": st["fees_entry"], "gaps": gaps})
+        actions.append({"spec_id": sid, "action": "ENTRY", "px": last_close})
+        n_open += 1
+        sym_count[sym] = sym_count.get(sym, 0) + 1
         state[sid] = st
 
     # ---- specs no longer promoted but holding a paper position: force-close
