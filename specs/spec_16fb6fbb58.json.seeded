@@ -1,0 +1,56 @@
+{
+ "name": "DOGE 4h Trend Initiation on Volatility and Sentiment Shift",
+ "asset": {
+  "class": "crypto",
+  "symbol": "DOGEUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "ema_cross_up",
+    "fast": 12,
+    "slow": 26,
+    "tf": "4h"
+   },
+   {
+    "type": "vol_spike",
+    "mult": 1.5,
+    "lookback": 20,
+    "tf": "4h"
+   },
+   {
+    "type": "fear_greed_above",
+    "threshold": 60
+   }
+  ],
+  "any": []
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "ema_cross_down",
+    "fast": 12,
+    "slow": 26,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 3,
+  "max_pos_frac": 0.25,
+  "cooldown_bars": 3
+ },
+ "confidence": 0.6,
+ "provenance": {
+  "thesis": "DOGE often experiences strong rallies when short-term momentum shifts positive, confirmed by a surge in trading volume and improving market sentiment."
+ },
+ "spec_id": "spec_16fb6fbb58",
+ "version": 1,
+ "created_ts": 1788928220.605824,
+ "checksum": "f492fdbb0498b73e"
+}

@@ -1,0 +1,54 @@
+{
+ "name": "BTC Daily Price Dip on Strong Cross-Asset Momentum",
+ "asset": {
+  "class": "crypto",
+  "symbol": "BTCUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "drawdown_from_high",
+    "pct": 0.15,
+    "lookback_d": 30
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 168
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "runup_from_low",
+    "pct": 0.1,
+    "lookback_d": 14
+   }
+  ],
+  "stops": {
+   "hard_pct": 0.08
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.3,
+  "cooldown_bars": 3
+ },
+ "confidence": 0.8,
+ "provenance": {
+  "thesis": "Bitcoin dips are often good buying opportunities, especially when the broader financial markets (equities, forex, gold) are showing sustained positive momentum, suggesting overall risk-on sentiment."
+ },
+ "spec_id": "spec_bcb5e1737d",
+ "version": 1,
+ "created_ts": 1788497117.5415483,
+ "checksum": "c6c2aa5b37f8fedc"
+}

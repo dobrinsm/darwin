@@ -1,0 +1,49 @@
+{
+ "name": "btc daily volume breakout",
+ "asset": {
+  "class": "crypto",
+  "symbol": "BTCUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "vol_spike",
+    "mult": 3,
+    "lookback": 50,
+    "tf": "1d"
+   },
+   {
+    "type": "price_above_sma",
+    "period": 50,
+    "tf": "1d"
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "price_below_sma",
+    "period": 50,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.25,
+  "cooldown_bars": 1
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "Significant volume accompanying price above a key moving average often signals strong institutional interest and continued upward momentum in Bitcoin."
+ },
+ "spec_id": "spec_87565b5a13",
+ "version": 1,
+ "created_ts": 1788172682.745193,
+ "checksum": "96cd3785e254067d"
+}

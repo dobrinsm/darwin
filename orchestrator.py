@@ -68,6 +68,22 @@ def main():
                 log(f"gauntlet: {lines[-1]}")
             open(gauntlet_flag, "w").write(day)
             gauntlet_ran = True
+            # unfrozen re-judged specs: a frozen spec that re-judges PROMOTE
+            # with LOO >= MIN_LOO earns its way back into the arena
+            try:
+                from darwin.arena import _load_frozen, unfreeze, MIN_LOO
+                fr = _load_frozen()
+                for sid in list(fr):
+                    rep_p = pathlib.Path(f"/root/darwin/runs/{sid}/report.json")
+                    if rep_p.exists():
+                        rep = json.loads(rep_p.read_text())
+                        if rep.get("verdict") == "PROMOTE" and \
+                                rep.get("oos_loo_sharpe", 0) >= MIN_LOO:
+                            unfreeze(sid)
+                            log(f"unfrozen: {sid} re-judged PROMOTE "
+                                f"loo={rep.get('oos_loo_sharpe', 0):+.2f}")
+            except Exception as e:
+                log(f"unfreeze check FAILED: {e}")
         except Exception as e:
             log(f"gauntlet FAILED: {e}\n{traceback.format_exc()[-400:]}")
 

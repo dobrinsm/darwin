@@ -1,0 +1,51 @@
+{
+ "name": "sol 4h volume-confirmed trend start",
+ "asset": {
+  "class": "crypto",
+  "symbol": "SOLUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "ema_cross_up",
+    "fast": 10,
+    "slow": 30,
+    "tf": "4h"
+   },
+   {
+    "type": "vol_spike",
+    "mult": 2.5,
+    "lookback": 20,
+    "tf": "4h"
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "ema_cross_down",
+    "fast": 10,
+    "slow": 30,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.12
+  }
+ },
+ "risk": {
+  "leverage": 3,
+  "max_pos_frac": 0.15,
+  "cooldown_bars": 3
+ },
+ "confidence": 0.65,
+ "provenance": {
+  "thesis": "New trends in SOL are often initiated with significant volume spikes, indicating institutional interest or strong conviction from market participants confirming the directional shift."
+ },
+ "spec_id": "spec_f0a127165d",
+ "version": 1,
+ "created_ts": 1788322518.9664304,
+ "checksum": "841ddf7296805cb5"
+}

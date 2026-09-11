@@ -1,0 +1,48 @@
+{
+ "name": "sw: doge ema trend",
+ "asset": {
+  "class": "crypto",
+  "symbol": "DOGEUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "ema_cross_up",
+    "fast": 20,
+    "slow": 100,
+    "tf": "1d"
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "ema_cross_down",
+    "fast": 20,
+    "slow": 100,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.25
+  }
+ },
+ "risk": {
+  "leverage": 3,
+  "max_pos_frac": 0.3,
+  "cooldown_bars": 2
+ },
+ "confidence": 0.5,
+ "provenance": {
+  "mined_from": [
+   "seed-batch"
+  ],
+  "model": "human"
+ },
+ "spec_id": "spec_1d8ec67f39",
+ "version": 1,
+ "created_ts": 1788172420.1188936,
+ "checksum": "3d60ea7e4eb8c0e4"
+}

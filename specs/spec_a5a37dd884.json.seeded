@@ -1,0 +1,54 @@
+{
+ "name": "doge 4h price rebound on market strength",
+ "asset": {
+  "class": "crypto",
+  "symbol": "DOGEUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "price_below_sma",
+    "period": 50,
+    "tf": "4h"
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 48
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "price_above_sma",
+    "period": 50,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "hard_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.2,
+  "cooldown_bars": 4
+ },
+ "confidence": 0.55,
+ "provenance": {
+  "thesis": "When a speculative asset like DOGE dips below a key moving average but the broader market shows strength, it can present a low-risk mean-reversion entry."
+ },
+ "spec_id": "spec_a5a37dd884",
+ "version": 1,
+ "created_ts": 1788408918.5457172,
+ "checksum": "f4b202180e0c4157"
+}

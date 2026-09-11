@@ -1,0 +1,50 @@
+{
+ "name": "eth 4h oversold bounce",
+ "asset": {
+  "class": "crypto",
+  "symbol": "ETHUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 30,
+    "tf": "4h"
+   },
+   {
+    "type": "drawdown_from_high",
+    "pct": 0.1,
+    "lookback_d": 30
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 70,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "hard_pct": 0.08
+  }
+ },
+ "risk": {
+  "leverage": 3,
+  "max_pos_frac": 0.2,
+  "cooldown_bars": 0
+ },
+ "confidence": 0.6,
+ "provenance": {
+  "thesis": "Ethereum, as a strong fundamental asset, often experiences sharp but temporary pullbacks (drawdowns and oversold RSI) that present attractive mean-reversion opportunities on shorter timeframes."
+ },
+ "spec_id": "spec_f36faa899c",
+ "version": 1,
+ "created_ts": 1788172682.7482753,
+ "checksum": "dd3046531d0aca6e"
+}

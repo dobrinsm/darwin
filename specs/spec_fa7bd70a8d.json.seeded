@@ -1,0 +1,54 @@
+{
+ "name": "SOL daily deep drawdown with sustained cross-asset momentum",
+ "asset": {
+  "class": "crypto",
+  "symbol": "SOLUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "drawdown_from_high",
+    "pct": 0.4,
+    "lookback_d": 90
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 72
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "runup_from_low",
+    "pct": 0.3,
+    "lookback_d": 90
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.2
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.35,
+  "cooldown_bars": 5
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "SOL's higher volatility makes deeper drawdowns common, offering a strong rebound opportunity when broader markets are supportive, suggesting institutional interest or macro tailwinds."
+ },
+ "spec_id": "spec_fa7bd70a8d",
+ "version": 1,
+ "created_ts": 1788496219.185468,
+ "checksum": "2cafc096d0c0de87"
+}

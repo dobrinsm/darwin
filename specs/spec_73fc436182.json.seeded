@@ -1,0 +1,48 @@
+{
+ "name": "btc 4h price dip in strong trend",
+ "asset": {
+  "class": "crypto",
+  "symbol": "BTCUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "price_above_sma",
+    "period": 50,
+    "tf": "4h"
+   },
+   {
+    "type": "drawdown_from_high",
+    "pct": 0.05,
+    "lookback_d": 7
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "price_below_sma",
+    "period": 50,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.1
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.2,
+  "cooldown_bars": 4
+ },
+ "confidence": 0.6,
+ "provenance": {
+  "thesis": "BTC often has short-term pullbacks within a broader uptrend, offering opportunities to buy the dip from stronger hands during consolidation phases."
+ },
+ "spec_id": "spec_73fc436182",
+ "version": 1,
+ "created_ts": 1788322518.9558096,
+ "checksum": "942f382096a6923e"
+}

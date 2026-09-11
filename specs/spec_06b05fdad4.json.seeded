@@ -1,0 +1,51 @@
+{
+ "name": "btc daily volume confirmed trend start",
+ "asset": {
+  "class": "crypto",
+  "symbol": "BTCUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "ema_cross_up",
+    "fast": 20,
+    "slow": 50,
+    "tf": "1d"
+   },
+   {
+    "type": "vol_spike",
+    "mult": 1.5,
+    "lookback": 30,
+    "tf": "1d"
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "ema_cross_down",
+    "fast": 20,
+    "slow": 50,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.25
+  }
+ },
+ "risk": {
+  "leverage": 1,
+  "max_pos_frac": 0.3,
+  "cooldown_bars": 5
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "A confirmed EMA crossover with a significant volume surge indicates strong conviction behind a new trend, reducing the chance of a false breakout."
+ },
+ "spec_id": "spec_06b05fdad4",
+ "version": 1,
+ "created_ts": 1788408918.5505311,
+ "checksum": "f36f20231a8ec050"
+}

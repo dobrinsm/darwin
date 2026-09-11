@@ -1,0 +1,67 @@
+{
+ "name": "ETH 1d Deep Drawdown Reversion with Cross-Asset Strength",
+ "asset": {
+  "class": "crypto",
+  "symbol": "ETHUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "drawdown_from_high",
+    "pct": 0.35,
+    "lookback_d": 90
+   },
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 30,
+    "tf": "1d"
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 72
+   }
+  ],
+  "any": []
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "runup_from_low",
+    "pct": 0.2,
+    "lookback_d": 30
+   },
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 70,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "hard_pct": 0.1
+  }
+ },
+ "risk": {
+  "leverage": 1,
+  "max_pos_frac": 0.3,
+  "cooldown_bars": 5
+ },
+ "confidence": 0.8,
+ "provenance": {
+  "thesis": "Significant drawdowns in ETH, coupled with oversold conditions and broader market strength, suggest a high probability of a mean reversion bounce driven by value buyers."
+ },
+ "spec_id": "spec_42f5412e82",
+ "version": 1,
+ "created_ts": 1789014618.9825487,
+ "checksum": "01e3a5c7ba10d260"
+}

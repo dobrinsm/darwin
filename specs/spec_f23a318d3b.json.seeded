@@ -1,0 +1,51 @@
+{
+ "name": "xlm daily volume confirmed capitulation",
+ "asset": {
+  "class": "crypto",
+  "symbol": "XLMUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 30,
+    "tf": "1d"
+   },
+   {
+    "type": "vol_spike",
+    "mult": 2,
+    "lookback": 50,
+    "tf": "1d"
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 70,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.2
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.25,
+  "cooldown_bars": 3
+ },
+ "confidence": 0.6,
+ "provenance": {
+  "thesis": "Extreme oversold conditions coupled with a volume spike often signal capitulation and a potential short-term reversal."
+ },
+ "spec_id": "spec_f23a318d3b",
+ "version": 1,
+ "created_ts": 1788408918.539667,
+ "checksum": "29644ee9976bec95"
+}

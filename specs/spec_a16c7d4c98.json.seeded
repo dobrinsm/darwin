@@ -1,0 +1,56 @@
+{
+ "name": "xlm 4h trend with cross-asset momentum",
+ "asset": {
+  "class": "crypto",
+  "symbol": "XLMUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "ema_cross_up",
+    "fast": 10,
+    "slow": 50,
+    "tf": "4h"
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 2,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 72
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "ema_cross_down",
+    "fast": 10,
+    "slow": 50,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.1
+  }
+ },
+ "risk": {
+  "leverage": 1,
+  "max_pos_frac": 0.4,
+  "cooldown_bars": 0
+ },
+ "confidence": 0.75,
+ "provenance": {
+  "thesis": "XLM's price trends can be reinforced and more reliable when broader financial markets also exhibit positive momentum, indicating a more generalized risk-on environment supporting crypto assets."
+ },
+ "spec_id": "spec_a16c7d4c98",
+ "version": 1,
+ "created_ts": 1788237922.9344642,
+ "checksum": "12c96f60ad302cc5"
+}

@@ -1,0 +1,62 @@
+{
+ "name": "ETH 4h Volatility Reversal with Cross-Asset Confirmation",
+ "asset": {
+  "class": "crypto",
+  "symbol": "ETHUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "vol_spike",
+    "mult": 3,
+    "lookback": 20,
+    "tf": "4h"
+   },
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 30,
+    "tf": "4h"
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 48
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 70,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "hard_pct": 0.08
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.2,
+  "cooldown_bars": 2
+ },
+ "confidence": 0.6,
+ "provenance": {
+  "thesis": "ETH can experience sharp reversals after periods of high selling pressure and capitulation (volatility spike + oversold RSI), which are often more reliable when broader financial markets show positive momentum, suggesting a flight back to risk."
+ },
+ "spec_id": "spec_4f7b4d1853",
+ "version": 1,
+ "created_ts": 1789100120.2573652,
+ "checksum": "6066449f88a86744"
+}

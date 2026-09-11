@@ -1,0 +1,49 @@
+{
+ "name": "BTC 4h oversold bounce with market enthusiasm",
+ "asset": {
+  "class": "crypto",
+  "symbol": "BTCUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 30,
+    "tf": "4h"
+   },
+   {
+    "type": "fear_greed_above",
+    "threshold": 60
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 70,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "hard_pct": 0.05
+  }
+ },
+ "risk": {
+  "leverage": 3,
+  "max_pos_frac": 0.2,
+  "cooldown_bars": 1
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "Short-term oversold conditions during periods of general market optimism can lead to quick bounces as buyers step in to capitalize on perceived value, fueled by positive sentiment."
+ },
+ "spec_id": "spec_a46a5c21c7",
+ "version": 1,
+ "created_ts": 1788669019.1624897,
+ "checksum": "5dba8a4dd62f3c9f"
+}

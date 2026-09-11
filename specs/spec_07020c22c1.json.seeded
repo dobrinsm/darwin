@@ -1,0 +1,56 @@
+{
+ "name": "btc 4h oversold bounce with market strength",
+ "asset": {
+  "class": "crypto",
+  "symbol": "BTCUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 30,
+    "tf": "4h"
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 48
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 70,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.25,
+  "cooldown_bars": 4
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "BTC often rebounds from oversold conditions, especially when broader markets show strength, suggesting capital rotation or a general risk-on sentiment."
+ },
+ "spec_id": "spec_07020c22c1",
+ "version": 1,
+ "created_ts": 1788237922.9262016,
+ "checksum": "d00b50be2d86e355"
+}

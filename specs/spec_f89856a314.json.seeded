@@ -1,0 +1,57 @@
+{
+ "name": "doge daily momentum with market strength",
+ "asset": {
+  "class": "crypto",
+  "symbol": "DOGEUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "ema_cross_up",
+    "fast": 10,
+    "slow": 50,
+    "tf": "1d"
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 48
+   }
+  ],
+  "any": []
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "ema_cross_down",
+    "fast": 10,
+    "slow": 50,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.25,
+  "cooldown_bars": 1
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "DOGE tends to follow broader market momentum, and an EMA cross confirms its own trend initiation, suggesting sustained upward movement."
+ },
+ "spec_id": "spec_f89856a314",
+ "version": 1,
+ "created_ts": 1788324318.3555305,
+ "checksum": "ee6ea8bb2cb46e8e"
+}

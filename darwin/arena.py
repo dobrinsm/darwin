@@ -40,6 +40,45 @@ STALE_HOURS = 36
 OPT_CHILD_MIN_SHARPE = 0.7
 OPT_CHILD_MIN_LOO = 0.25
 
+# Every spec must clear this LOO bar to trade, not just optimizer children.
+# LOO = leave-one-out OOS sharpe: negative means the edge lives in one lucky
+# window. Miner-born specs used to skip this gate — 4 of the 7 open positions
+# on 2026-09-11 sat in negative-LOO specs, all underwater. Was asymmetrical;
+# now universal.
+MIN_LOO = 0.1
+
+# Live demotion: a promoted spec whose paper equity falls below this is frozen
+# (no new entries; open position closes on its own exit signal) until a fresh
+# gauntlet re-judges it. Spec files live in data/frozen_specs.json.
+FREEZE_EQUITY = 9_500.0
+FROZEN_P = DATA / "frozen_specs.json"
+
+
+def _load_frozen() -> dict:
+    """{spec_id: {frozen_at, equity, reason}} — frozen until unfrozen explicitly
+    or re-judged (gauntlet overwrites runs/<sid>/report.json; unfreeze lives in
+    orchestrator after gauntlet phase)."""
+    if FROZEN_P.exists():
+        try:
+            return json.loads(FROZEN_P.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_frozen(fr: dict):
+    DATA.mkdir(parents=True, exist_ok=True)
+    FROZEN_P.write_text(json.dumps(fr, indent=1))
+
+
+def unfreeze(spec_id: str) -> bool:
+    fr = _load_frozen()
+    if spec_id in fr:
+        del fr[spec_id]
+        _save_frozen(fr)
+        return True
+    return False
+
 # live-account cost model — single source of truth is engine.py
 COST_PER_SIDE = FEE + SLIPPAGE_BPS / 1e4
 NOTIONAL_CAP = 0.9   # engine.simulate clips notional fraction at 0.9 of equity
@@ -49,12 +88,17 @@ NOTIONAL_CAP = 0.9   # engine.simulate clips notional fraction at 0.9 of equity
 def promoted_specs() -> list[dict]:
     out = []
     now = time.time()
+    frozen = _load_frozen()
     for p in SPEC_DIR.glob("*.json"):
+        if p.stem in frozen:
+            continue
         rep_p = Path(__file__).resolve().parent.parent / "runs" / p.stem / "report.json"
         if not rep_p.exists():
             continue
         rep = json.loads(rep_p.read_text())
         if rep.get("verdict") != "PROMOTE" or now - rep.get("ran_at", 0) >= STALE_HOURS * 3600:
+            continue
+        if rep.get("oos_loo_sharpe", 0) < MIN_LOO:
             continue
         prov = (load_spec(p.stem).get("provenance") or {})
         if prov.get("model") == "optimizer-grid-v1" and (
@@ -187,7 +231,26 @@ def step(bus: EventBus | None = None) -> dict:
                 st["coins"] * (last_close - (st.get("entry_px") or last_close))
                 - st["coins"] * last_close * COST_PER_SIDE, 2)
 
+        # ---- live demotion check: paper equity below FREEZE_EQUITY -> freeze
+        # (no new entries; position already open rides to its own exit signal).
+        # Frozen here so the spec drops out of promoted set on the NEXT tick;
+        # this tick it may still exit but cannot re-enter.
+        if st.get("equity", START_EQ) < FREEZE_EQUITY:
+            fr = _load_frozen()
+            if sid not in fr:
+                fr[sid] = {"frozen_at": now, "equity": st["equity"],
+                           "reason": f"equity below {FREEZE_EQUITY:.0f}"}
+                _save_frozen(fr)
+                _log_trade({"ts": now, "spec_id": sid, "name": spec["name"],
+                            "action": "FROZEN", "symbol": sym,
+                            "equity": st["equity"], "meta": True})
+                actions.append({"spec_id": sid, "action": "FROZEN",
+                                "equity": st["equity"]})
+
         if desired == 1 and not st.get("in_pos"):
+            if sid in _load_frozen():
+                state[sid] = st
+                continue
             st.update(in_pos=1, entry_px=last_close, entry_ts=last_ts,
                       lev=lev, symbol=sym, funding_trade=0.0)
             _init_position(st, st.get("equity", START_EQ), last_close)

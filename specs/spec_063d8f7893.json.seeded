@@ -1,0 +1,51 @@
+{
+ "name": "ETH 1d Volatility-Confirmed Rebound from Oversold Conditions",
+ "asset": {
+  "class": "crypto",
+  "symbol": "ETHUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 30,
+    "tf": "1d"
+   },
+   {
+    "type": "vol_spike",
+    "mult": 1.5,
+    "lookback": 20,
+    "tf": "1d"
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 70,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.2
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.3,
+  "cooldown_bars": 5
+ },
+ "confidence": 0.65,
+ "provenance": {
+  "thesis": "An oversold condition on Ethereum, particularly when accompanied by a surge in trading volume, often signals a capitulation event followed by a strong rebound as new buyers enter the market."
+ },
+ "spec_id": "spec_063d8f7893",
+ "version": 1,
+ "created_ts": 1788840918.0192332,
+ "checksum": "5464f767ed3a1959"
+}

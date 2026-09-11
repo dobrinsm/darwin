@@ -1,0 +1,54 @@
+{
+ "name": "BTC 4h ema cross with positive sentiment",
+ "asset": {
+  "class": "crypto",
+  "symbol": "BTCUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "ema_cross_up",
+    "fast": 10,
+    "slow": 30,
+    "tf": "4h"
+   },
+   {
+    "type": "fear_greed_above",
+    "threshold": 60
+   }
+  ],
+  "any": []
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "ema_cross_down",
+    "fast": 10,
+    "slow": 30,
+    "tf": "4h"
+   },
+   {
+    "type": "fear_greed_below",
+    "threshold": 30
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.2
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.3,
+  "cooldown_bars": 2
+ },
+ "confidence": 0.75,
+ "provenance": {
+  "thesis": "A short-term bullish EMA crossover on Bitcoin, reinforced by positive market sentiment, often signals sustainable upward momentum as crowd psychology aligns with technical strength."
+ },
+ "spec_id": "spec_10949d3ac3",
+ "version": 1,
+ "created_ts": 1788582616.3209226,
+ "checksum": "241bf2ce9452d137"
+}

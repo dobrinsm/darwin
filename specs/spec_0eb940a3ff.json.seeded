@@ -1,0 +1,63 @@
+{
+ "name": "XLM 4h volatility reversal with cross-asset strength",
+ "asset": {
+  "class": "crypto",
+  "symbol": "XLMUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "vol_spike",
+    "mult": 3,
+    "lookback": 50,
+    "tf": "4h"
+   },
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 30,
+    "tf": "4h"
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 48
+   }
+  ],
+  "any": []
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 70,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.2,
+  "cooldown_bars": 1
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "Extreme volatility on Stellar Lumens, coupled with oversold conditions and broad market strength, suggests a capitulation event followed by a quick rebound."
+ },
+ "spec_id": "spec_0eb940a3ff",
+ "version": 1,
+ "created_ts": 1788495335.7491097,
+ "checksum": "17bd673bed23c2f7"
+}

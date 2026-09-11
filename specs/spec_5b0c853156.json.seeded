@@ -1,0 +1,50 @@
+{
+ "name": "XLM Daily Momentum with Price Support",
+ "asset": {
+  "class": "crypto",
+  "symbol": "XLMUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "ema_cross_up",
+    "fast": 10,
+    "slow": 50,
+    "tf": "1d"
+   },
+   {
+    "type": "price_above_sma",
+    "period": 20,
+    "tf": "1d"
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "ema_cross_down",
+    "fast": 10,
+    "slow": 50,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.25,
+  "cooldown_bars": 1
+ },
+ "confidence": 0.6,
+ "provenance": {
+  "thesis": "XLM breaking into an uptrend, confirmed by short-term price staying above a medium-term moving average, suggests sustained buying interest."
+ },
+ "spec_id": "spec_5b0c853156",
+ "version": 1,
+ "created_ts": 1788497117.5327137,
+ "checksum": "4b165e29fa521f72"
+}

@@ -96,8 +96,9 @@ def snapshot(root: Path = ROOT) -> dict:
         if (data / "last_gauntlet.txt").exists() else None
 
     # single source of truth for what the arena actually trades
-    from .arena import promoted_specs
+    from .arena import promoted_specs, _load_frozen
     live_ids = {s["spec_id"] for s in promoted_specs()}
+    frozen = _load_frozen()
     bus_events = None
     db = data / "events.db"
     if db.exists():
@@ -113,7 +114,7 @@ def snapshot(root: Path = ROOT) -> dict:
             "state": state, "trades": trades, "collectors": coll_latest,
             "collector_age": coll_age, "theses": theses, "tick_age": tick_age,
             "gauntlet_age": gauntlet_age, "bus_events": bus_events,
-            "live_ids": live_ids}
+            "live_ids": live_ids, "frozen": frozen}
 
 
 # ---------------------------------------------------------------- render
@@ -286,6 +287,7 @@ def render(snap: dict) -> str:
  <div class="card"><div class="k">killed</div><div class="v" style="color:#f85149">{v['KILL']}</div></div>
  <div class="card"><div class="k">arena positions</div><div class="v">{n_pos}</div></div>
  <div class="card"><div class="k">arena equity</div><div class="v">{_fmt(equity, 0)}</div></div>
+ <div class="card"><div class="k">frozen</div><div class="v" style="color:#f85149">{len(snap.get('frozen') or {})}</div></div>
 </div>
 
 <h2>Feeds</h2>
@@ -372,6 +374,10 @@ def text_report(root: Path = ROOT) -> str:
         lines.append(f"  ★ {r['spec_id']} {r['name'][:36]:38}"
                      f" oos={r['avg_oos_sharpe']:+.2f} loo={r.get('oos_loo_sharpe', 0):+.2f}"
                      f" eq={st.get('equity', 0):,.0f}  [{ptxt}]")
+    frozen = snap.get("frozen") or {}
+    if frozen:
+        fr = ", ".join(f"{k}(eq {v.get('equity', 0):,.0f})" for k, v in frozen.items())
+        lines.append(f"frozen: {fr}")
     for t in snap["trades"][:6]:
         extra = f" pnl {t['pnl_usd']:+.2f}" if "pnl_usd" in t else ""
         lines.append(f"  {time.strftime('%m-%d %H:%M', time.gmtime(t.get('ts', 0)))}"

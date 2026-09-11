@@ -1,0 +1,47 @@
+{
+ "name": "SOL 4h mean reversion with positive sentiment",
+ "asset": {
+  "class": "crypto",
+  "symbol": "SOLUSDT",
+  "tf": "4h"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "price_below_sma",
+    "period": 50,
+    "tf": "4h"
+   },
+   {
+    "type": "fear_greed_above",
+    "threshold": 60
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "price_above_sma",
+    "period": 50,
+    "tf": "4h"
+   }
+  ],
+  "stops": {
+   "hard_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.25,
+  "cooldown_bars": 4
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "Solana tends to rebound from short-term dips when overall market sentiment remains positive, suggesting a healthy underlying demand."
+ },
+ "spec_id": "spec_745dfe2eb3",
+ "version": 1,
+ "created_ts": 1788841828.1958988,
+ "checksum": "d11f3c8e9d182a4b"
+}

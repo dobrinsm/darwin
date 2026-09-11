@@ -1,0 +1,67 @@
+{
+ "name": "XLM Daily Value Reversion with Cross-Asset Strength",
+ "asset": {
+  "class": "crypto",
+  "symbol": "XLMUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "price_below_sma",
+    "period": 50,
+    "tf": "1d"
+   },
+   {
+    "type": "rsi_below",
+    "period": 14,
+    "threshold": 40,
+    "tf": "1d"
+   },
+   {
+    "type": "cross_asset_score",
+    "min_score": 3,
+    "assets": [
+     "SPY",
+     "QQQ",
+     "EUR",
+     "XAU"
+    ],
+    "mom_h": 72
+   }
+  ],
+  "any": []
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "price_above_sma",
+    "period": 50,
+    "tf": "1d"
+   },
+   {
+    "type": "rsi_above",
+    "period": 14,
+    "threshold": 60,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "hard_pct": 0.1
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.2,
+  "cooldown_bars": 5
+ },
+ "confidence": 0.7,
+ "provenance": {
+  "thesis": "XLM tends to revert to its mean when oversold and trading below a key moving average, especially when broader markets show strength."
+ },
+ "spec_id": "spec_79c7b95fc6",
+ "version": 1,
+ "created_ts": 1788928220.602162,
+ "checksum": "86f31f3b0ab2e94f"
+}

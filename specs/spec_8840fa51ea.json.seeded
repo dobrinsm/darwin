@@ -1,0 +1,47 @@
+{
+ "name": "SOL daily price channel breakout with strong sentiment",
+ "asset": {
+  "class": "crypto",
+  "symbol": "SOLUSDT",
+  "tf": "1d"
+ },
+ "direction": "long",
+ "entry": {
+  "all": [
+   {
+    "type": "price_above_sma",
+    "period": 50,
+    "tf": "1d"
+   },
+   {
+    "type": "fear_greed_above",
+    "threshold": 60
+   }
+  ]
+ },
+ "exit": {
+  "any": [
+   {
+    "type": "price_below_sma",
+    "period": 50,
+    "tf": "1d"
+   }
+  ],
+  "stops": {
+   "trail_pct": 0.15
+  }
+ },
+ "risk": {
+  "leverage": 2,
+  "max_pos_frac": 0.2,
+  "cooldown_bars": 3
+ },
+ "confidence": 0.6,
+ "provenance": {
+  "thesis": "Price breaking above a significant moving average combined with positive market sentiment indicates a strong trend continuation, as traders pile into confirmed upward moves."
+ },
+ "spec_id": "spec_8840fa51ea",
+ "version": 1,
+ "created_ts": 1788668118.5448048,
+ "checksum": "3001d96504815776"
+}
