@@ -136,6 +136,32 @@ def _log_trade(row: dict):
         f.write(json.dumps(row) + "\n")
 
 
+BLOCKED_LOG_P = DATA / "blocked_log.json"
+
+
+def _log_blocked_once(sid: str, spec: dict, sym: str,
+                      bar_ts: float, reason: str):
+    """Log a BLOCKED row once per spec per bar. The same 4h-bar entry signal
+    re-evaluates on every 15-min tick while the condition holds; without this
+    gate one signal produced 16 identical trade-log rows and spammed the
+    digest (2026-09-12). A NEW bar closing with the condition still true
+    logs one fresh row — that repetition is signal, not noise."""
+    try:
+        seen = json.loads(BLOCKED_LOG_P.read_text())
+    except Exception:
+        seen = {}
+    last = seen.get(sid, 0)
+    if last >= int(bar_ts):
+        return                      # already logged for this bar
+    seen[sid] = int(bar_ts)
+    seen = {k: v for k, v in seen.items() if bar_ts - v < 30 * 86400}
+    DATA.mkdir(parents=True, exist_ok=True)
+    BLOCKED_LOG_P.write_text(json.dumps(seen))
+    _log_trade({"ts": bar_ts, "spec_id": sid, "name": spec["name"],
+                "action": "BLOCKED", "symbol": sym,
+                "reason": reason, "meta": True})
+
+
 # ---------------------------------------------------------------- pnl math
 def _funding_since(bus: EventBus, symbol: str, since_ts: float,
                    until_ts: float) -> list:
@@ -304,18 +330,14 @@ def step(bus: EventBus | None = None) -> dict:
         if sid in _load_frozen():
             continue
         if n_open >= MAX_TOTAL_POSITIONS:
-            _log_trade({"ts": last_ts, "spec_id": sid, "name": spec["name"],
-                        "action": "BLOCKED", "symbol": sym, "px": last_close,
-                        "reason": f"book cap {MAX_TOTAL_POSITIONS} positions",
-                        "meta": True})
+            reason = f"book cap {MAX_TOTAL_POSITIONS} positions"
+            _log_blocked_once(sid, spec, sym, last_ts, reason)
             actions.append({"spec_id": sid, "action": "BLOCKED",
                             "reason": "book_cap"})
             continue
         if sym_count.get(sym, 0) >= MAX_PER_SYMBOL:
-            _log_trade({"ts": last_ts, "spec_id": sid, "name": spec["name"],
-                        "action": "BLOCKED", "symbol": sym, "px": last_close,
-                        "reason": f"symbol cap {MAX_PER_SYMBOL} on {sym}",
-                        "meta": True})
+            reason = f"symbol cap {MAX_PER_SYMBOL} on {sym}"
+            _log_blocked_once(sid, spec, sym, last_ts, reason)
             actions.append({"spec_id": sid, "action": "BLOCKED",
                             "reason": "symbol_cap", "symbol": sym})
             continue
