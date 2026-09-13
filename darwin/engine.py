@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 
 from .bus import EventBus
-from .spec_schema import NODE_TYPES
 
 FEE = 0.0005          # Binance taker per side, on notional
 SLIPPAGE_BPS = 2.0    # adverse fill per side on notional (liquid top-slice)
@@ -350,7 +349,8 @@ def delayed_entry_allowed(spec: dict, df: pd.DataFrame, ctx: Context,
                for node in triggers)
 
 
-def compile_signal(spec: dict, df: pd.DataFrame, ctx: Context) -> tuple[pd.Series, list[str]]:
+def compile_signal(spec: dict, df: pd.DataFrame,
+                   ctx: Context) -> tuple[pd.Series, pd.Series, list[str]]:
     """Return boolean entry/exit Series + list of data gaps found."""
     gaps = []
     for section in ("entry", "exit"):

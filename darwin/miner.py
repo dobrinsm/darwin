@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .bus import EventBus
 from .engine import load_klines
-from .spec_schema import NODE_TYPES, SPEC_DIR, validate_spec, save_spec
+from .spec_schema import SPEC_DIR, save_spec, validate_spec
 
 MODEL = os.environ.get("DARWIN_MINER_MODEL", "google/gemini-2.5-flash")
 MAX_PROPOSALS = 3
