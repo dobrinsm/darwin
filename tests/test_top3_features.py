@@ -64,6 +64,12 @@ def test_schema_rejects_bad_funding_timeframe_and_hold_ranges():
     errors = validate_spec(tf_spec)
     assert any("param 'tf'='1h'" in error for error in errors)
 
+    lower_tf_spec = demo_spec()
+    lower_tf_spec["entry"]["all"][0]["tf"] = "4h"
+    errors = validate_spec(lower_tf_spec)
+    assert any("node tf '4h' is lower than asset tf '1d'" in error
+               for error in errors)
+
     hold_spec = demo_spec()
     hold_spec["exit"]["max_hold_bars"] = 0
     assert any("max_hold_bars" in error for error in validate_spec(hold_spec))
@@ -71,7 +77,11 @@ def test_schema_rejects_bad_funding_timeframe_and_hold_ranges():
 
 # ------------------------------------------------------------- funding nodes
 def test_funding_nodes_use_only_latest_known_settlement():
-    idx = pd.date_range("2024-01-01 12:00", periods=3, freq="24h", tz="UTC")
+    idx = pd.DatetimeIndex([
+        pd.Timestamp("2024-01-01 04:00", tz="UTC"),
+        pd.Timestamp("2024-01-01 08:00", tz="UTC"),
+        pd.Timestamp("2024-01-03 04:00", tz="UTC"),
+    ])
     df = _bars(idx, [100, 100, 100])
     funding_idx = pd.DatetimeIndex([
         pd.Timestamp("2024-01-01 00:00", tz="UTC"),
@@ -93,6 +103,19 @@ def test_funding_nodes_use_only_latest_known_settlement():
     past_above = _node_to_bool(
         {"type": "funding_above", "threshold": 0.0005}, df.iloc[:2], past_ctx)
     assert above.iloc[:2].tolist() == past_above.tolist()
+
+
+def test_stale_funding_cannot_admit_an_entry():
+    idx = pd.date_range("2024-01-01 04:00", periods=3, freq="4h", tz="UTC")
+    df = _bars(idx, [100, 100, 100])
+    funding = pd.Series(
+        [0.0001], index=pd.DatetimeIndex([pd.Timestamp("2024-01-01", tz="UTC")]))
+
+    below = _node_to_bool(
+        {"type": "funding_below", "threshold": 0.0005},
+        df, _StubContext(funding=funding))
+
+    assert below.tolist() == [True, True, False]
 
 
 def test_missing_funding_is_false_and_reported_as_data_gap():
@@ -195,6 +218,81 @@ def test_max_hold_reduces_one_shot_slow_bleed_loss():
     assert timed_net.sum() > legacy_net.sum()
 
 
+def test_walk_forward_preserves_hold_age_at_oos_boundary(monkeypatch):
+    import darwin.gauntlet as gauntlet
+
+    idx = pd.date_range("2023-01-01", periods=548, freq="24h", tz="UTC")
+    df = _bars(idx, np.full(len(idx), 100.0))
+    spec = demo_spec()
+    spec["spec_id"] = "spec_boundary"
+    spec["exit"] = {"any": [], "max_hold_bars": 24, "stops": {}}
+
+    def fake_compile(_, bars, __):
+        entry = pd.Series(
+            (bars.index >= idx[360]) & (bars.index <= idx[365]),
+            index=bars.index)
+        return entry, pd.Series(False, index=bars.index), []
+
+    monkeypatch.setattr(gauntlet, "compile_signal", fake_compile)
+    report = gauntlet.evaluate_spec(object(), spec, df=df, ctx=object())
+
+    assert report["walk_forward"][0]["oos"]["exposure"] == 10.4
+
+
+def test_arena_times_exit_from_live_fill(monkeypatch, tmp_path):
+    import darwin.arena as arena
+
+    idx = pd.date_range("2024-01-01", periods=7, freq="24h", tz="UTC")
+    all_bars = _bars(idx, np.full(len(idx), 100.0))
+    spec = demo_spec()
+    spec["spec_id"] = "spec_live_hold"
+    spec["exit"] = {"any": [], "max_hold_bars": 3, "stops": {}}
+    initial = {
+        spec["spec_id"]: {
+            "in_pos": 1, "entry_px": 100.0,
+            "entry_ts": float(idx[2].timestamp()), "equity": 10_000.0,
+            "coins": 90.0, "lev": 3, "symbol": "DOGEUSDT",
+            "funding_trade": 0.0, "last_funding_ts": float(idx[2].timestamp()),
+        }
+    }
+    current = {"bars": all_bars.iloc[:4], "state": initial}
+    saved = {}
+
+    def fake_compile(_, bars, __):
+        entry = pd.Series(False, index=bars.index)
+        entry.iloc[0] = True
+        return entry, pd.Series(False, index=bars.index), []
+
+    def fake_save(state):
+        saved["state"] = copy.deepcopy(state)
+
+    monkeypatch.setattr(arena, "promoted_specs", lambda: [spec])
+    monkeypatch.setattr(arena, "load_klines", lambda *args: current["bars"])
+    monkeypatch.setattr(arena, "Context", lambda *args: object())
+    monkeypatch.setattr(arena, "compile_signal", fake_compile)
+    monkeypatch.setattr(arena, "_load_state", lambda: copy.deepcopy(current["state"]))
+    monkeypatch.setattr(arena, "_save_state", fake_save)
+    monkeypatch.setattr(arena, "_load_frozen", lambda: {})
+    monkeypatch.setattr(arena, "_save_frozen", lambda _: None)
+    monkeypatch.setattr(arena, "_funding_since", lambda *args: [])
+    monkeypatch.setattr(arena, "_log_trade", lambda _: None)
+    monkeypatch.setattr(arena, "EQUITY_P", tmp_path / "equity.jsonl")
+
+    before_limit = arena.step(object())
+    assert spec["spec_id"] in before_limit["positions"]
+
+    current["bars"] = all_bars.iloc[:6]
+    at_limit = arena.step(object())
+    assert any(action.get("action") == "EXIT" for action in at_limit["actions"])
+    assert spec["spec_id"] not in at_limit["positions"]
+
+    current["state"] = saved["state"]
+    current["bars"] = all_bars
+    after_limit = arena.step(object())
+    assert not any(action.get("action") == "ENTRY" for action in after_limit["actions"])
+    assert spec["spec_id"] not in after_limit["positions"]
+
+
 # -------------------------------------------------------------- optimizer
 def test_optimizer_mutates_funding_and_time_exit_without_key_collisions():
     spec = demo_spec()
@@ -210,3 +308,18 @@ def test_optimizer_mutates_funding_and_time_exit_without_key_collisions():
     changed_hold = copy.deepcopy(spec)
     changed_hold["exit"]["max_hold_bars"] = 24
     assert _spec_key(changed_hold) != seed_key
+
+
+def test_optimizer_pairs_entry_and_exit_node_mutations():
+    spec = demo_spec()
+    entry_fast = spec["entry"]["all"][0]["fast"]
+    exit_fast = spec["exit"]["any"][0]["fast"]
+
+    mutations = enumerate_mutations(spec, cap=500, pair_cap=500)
+
+    assert any(
+        candidate["entry"]["all"][0]["fast"] != entry_fast
+        and candidate["exit"]["any"][0]["fast"] != exit_fast
+        for candidate in mutations
+    )
+    assert all("fast" not in candidate["exit"] for candidate in mutations)

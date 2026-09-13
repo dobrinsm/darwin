@@ -144,6 +144,7 @@ _NODE_PARAM_LIMITS = {
     ("funding_below", "threshold"): (-0.01, 0.01),
 }
 _NODE_PARAM_VALUES = {"tf": {"4h", "1d"}}
+_TIMEFRAME_RANK = {"4h": 0, "1d": 1}
 
 
 def _check_nodes(spec: dict, errors: list[str]) -> None:
@@ -178,6 +179,12 @@ def _check_nodes(spec: dict, errors: list[str]) -> None:
                 if values and node[k] not in values:
                     errors.append(f"{section}/{ntype}: param '{k}'={node[k]!r} not in "
                                   f"{sorted(values)}")
+            asset_tf = (spec.get("asset") or {}).get("tf")
+            node_tf = node.get("tf")
+            if asset_tf in _TIMEFRAME_RANK and node_tf in _TIMEFRAME_RANK \
+                    and _TIMEFRAME_RANK[node_tf] < _TIMEFRAME_RANK[asset_tf]:
+                errors.append(f"{section}/{ntype}: node tf '{node_tf}' is lower than "
+                              f"asset tf '{asset_tf}'")
 
 
 def validate_spec(spec: dict) -> list[str]:

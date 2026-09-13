@@ -196,7 +196,7 @@ def enumerate_mutations(spec: dict, cap: int = MAX_CANDIDATES,
             sec, lst, ni = None, None, None
             if t2.startswith("exit.stops."):
                 m = _apply_stop(m1, p2, v2)
-            elif t2.startswith("exit."):
+            elif t2 == f"exit.{p2}" and p2 in EXIT_PARAM_GRIDS:
                 m = _apply_exit_param(m1, p2, v2)
             else:
                 target, _, _ = t2.rpartition("[")

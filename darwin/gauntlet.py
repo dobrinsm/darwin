@@ -59,14 +59,8 @@ def evaluate_spec(bus: EventBus, spec: dict, start: str = "2020-01-01",
         m = (idx >= start_ts) & (idx < is_end)
         o = (idx >= is_end) & (idx < oos_end)
         if m.sum() > 100 and o.sum() > 30:
-            # recompile signals on IS window only (context as-of IS end)
-            e_is, x_is, _ = compile_signal(spec, df[m], ctx)
-            net_is, f_is = simulate(spec, df[m], e_is, x_is, ctx)
-            # OOS: carry position state approximately by recompiling on the
-            # OOS slice with signals from the same spec (params are fixed by
-            # IS; no re-optimization happens here — this is validation, not fit)
-            e_oos, x_oos, _ = compile_signal(spec, df[o], ctx)
-            net_oos, f_oos = simulate(spec, df[o], e_oos, x_oos, ctx)
+            net_is, f_is = net[m], frame.loc[m]
+            net_oos, f_oos = net[o], frame.loc[o]
             wf.append({
                 "is_start": str(start_ts.date()), "oos_start": str(is_end.date()),
                 "oos_end": str(min(oos_end, idx[-1]).date()),

@@ -40,9 +40,9 @@ NODE_CHEATSHEET = """
 - cross_asset_score {min_score 0-5, assets ["SPY","QQQ","EUR","XAU"], mom_h 24-336}
     counts how many of those assets have positive momentum; entry requires
     score >= min_score. Equity/FX/gold data is live on the bus.
-TA-node tf: "1d" or "4h" and MAY differ from the asset tf. Example: a 4h
-entry can require price_above_sma {period 200, tf "1d"}; only completed 1d bars
-are visible, making this a point-in-time higher-timeframe regime gate.
+TA-node tf: "1d" or "4h", equal to or higher than the asset tf. A 4h entry
+can require price_above_sma {period 200, tf "1d"}; a 1d strategy must use 1d
+nodes. Only completed higher-timeframe bars are visible.
 Exit safety field (not a node): exit.max_hold_bars is an integer 1-500 and caps
 position age in asset-timeframe bars. Symbols: XLMUSDT, DOGEUSDT, SOLUSDT,
 BTCUSDT, ETHUSDT.
@@ -241,8 +241,9 @@ Rules:
   when the thesis should expire rather than bleed indefinitely.
 - Keep entries compact: normally one trigger plus at most one independent
   regime/crowding veto. Extra AND conditions often never fire.
-- A TA node may use a different tf from the asset. For 4h entries, prefer a
-  completed 1d trend node when the thesis requires broad-regime agreement.
+- A TA node may use the asset tf or a higher tf, never a lower tf. For 4h
+  entries, prefer a completed 1d trend node when broad-regime agreement matters;
+  every TA node in a 1d strategy must use 1d.
 - Think about WHY each edge could exist (behavioral, flow, structure) and put it in provenance.thesis.
 - STUDY THE FAILURE REPORT below before proposing. Do not resubmit a thesis
   family that already died the same way (same mechanism + same asset + similar

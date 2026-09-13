@@ -218,7 +218,8 @@ def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
             return pd.Series(False, index=idx)
         # Realized settlement facts are indexed by settlement time. ffill at
         # each bar close therefore reads only the latest rate already known.
-        known = ctx.funding.reindex(idx, method="ffill")
+        known = ctx.funding.reindex(
+            idx, method="ffill", tolerance=pd.Timedelta(hours=8))
         return ((known > node["threshold"]) if t == "funding_above"
                 else (known < node["threshold"])).fillna(False)
     if t in ("fear_greed_below", "fear_greed_above"):
