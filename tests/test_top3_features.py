@@ -9,7 +9,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from darwin.engine import (_node_to_bool, compile_signal,
-                           funding_entry_allowed, simulate)
+                           delayed_entry_allowed, simulate)
 from darwin.optimizer import _spec_key, enumerate_mutations
 from darwin.spec_schema import demo_spec, validate_spec
 
@@ -141,7 +141,7 @@ def test_stale_funding_cannot_admit_an_entry():
     assert below.tolist() == [True, True, False]
 
 
-def test_funding_fill_guard_preserves_any_branch_semantics():
+def test_delayed_fill_guard_preserves_any_branch_semantics():
     idx = pd.date_range("2024-01-01", periods=3, freq="4h", tz="UTC")
     rising = _bars(idx, [1, 2, 3])
     spec = demo_spec()
@@ -152,16 +152,56 @@ def test_funding_fill_guard_preserves_any_branch_semantics():
     ]}
     high_funding = pd.Series([0.0008], index=pd.DatetimeIndex([idx[-1]]))
 
-    assert funding_entry_allowed(
+    assert delayed_entry_allowed(
         spec, rising, _StubContext(funding=high_funding),
         idx[-1], idx[-1].timestamp())
 
     falling = _bars(idx, [3, 2, 1])
     settlement_idx = pd.DatetimeIndex([idx[-1], idx[-1] + pd.Timedelta(hours=8)])
     changing_funding = pd.Series([0.0001, 0.0008], index=settlement_idx)
-    assert not funding_entry_allowed(
+    assert not delayed_entry_allowed(
         spec, falling, _StubContext(funding=changing_funding),
         idx[-1], settlement_idx[-1].timestamp())
+
+
+def test_delayed_fill_accepts_a_later_any_trigger():
+    idx = pd.date_range("2024-01-01", periods=5, freq="4h", tz="UTC")
+    df = _bars(idx, [3, 2, 1, 2, 3])
+    spec = demo_spec()
+    spec["asset"]["tf"] = "4h"
+    spec["entry"] = {"all": [], "any": [
+        {"type": "ema_cross_up", "fast": 2, "slow": 3, "tf": "4h"},
+        {"type": "funding_below", "threshold": 0.0005},
+    ]}
+    funding = pd.Series(
+        [0.0001, 0.0008], index=pd.DatetimeIndex(idx[-2:]))
+    ctx = _StubContext(funding=funding)
+
+    assert _node_to_bool(spec["entry"]["any"][1], df, ctx).loc[idx[-2]]
+    assert _node_to_bool(spec["entry"]["any"][0], df, ctx).loc[idx[-1]]
+    assert delayed_entry_allowed(
+        spec, df, ctx, idx[-2], idx[-1].timestamp())
+
+
+def test_delayed_fill_rechecks_completed_daily_regime():
+    base_idx = pd.DatetimeIndex([
+        pd.Timestamp("2024-01-02 12:00", tz="UTC"),
+        pd.Timestamp("2024-01-02 20:00", tz="UTC"),
+    ])
+    daily_idx = pd.date_range("2024-01-01", periods=3, freq="24h", tz="UTC")
+    base = _bars(base_idx, [100, 100])
+    daily = _bars(daily_idx, [1, 3, 0])
+    spec = demo_spec()
+    spec["asset"]["tf"] = "4h"
+    spec["entry"] = {"all": [
+        {"type": "price_above_sma", "period": 2, "tf": "1d"},
+    ]}
+    ctx = _StubContext(higher=daily)
+
+    gate = spec["entry"]["all"][0]
+    assert _node_to_bool(gate, base, ctx).iloc[-1]
+    assert not delayed_entry_allowed(
+        spec, base, ctx, base_idx[-1], daily_idx[-1].timestamp())
 
 
 def test_missing_funding_is_false_and_reported_as_data_gap():
@@ -322,8 +362,11 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     all_bars = _bars(idx, np.full(len(idx), 100.0))
     spec = demo_spec()
     spec["spec_id"] = "spec_live_hold"
-    spec["entry"]["all"].append(
-        {"type": "funding_below", "threshold": 0.0005})
+    spec["asset"]["tf"] = "4h"
+    spec["entry"]["all"].extend([
+        {"type": "funding_below", "threshold": 0.0005},
+        {"type": "price_above_sma", "period": 2, "tf": "1d"},
+    ])
     spec["exit"] = {"any": [], "max_hold_bars": 3, "stops": {}}
     spec["risk"]["cooldown_bars"] = 2
     initial = {
@@ -338,6 +381,7 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
         "bars": all_bars.iloc[:4], "state": initial,
         "persistent": False, "entry_indices": [], "exit_indices": [],
         "cycle_offset_h": 0, "funding_events": [(0, 0.0001)],
+        "regime_allowed": True,
     }
     saved = {}
 
@@ -349,7 +393,11 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
                 bar_ts + pd.Timedelta(hours=offset)
                 for offset, _ in current["funding_events"]
             ]))
-        return _StubContext(funding=funding)
+        regime = np.arange(1, len(current["bars"]) + 1, dtype=float)
+        if not current["regime_allowed"]:
+            regime[-1] = 0
+        higher = _bars(current["bars"].index, regime)
+        return _StubContext(higher=higher, funding=funding)
 
     def fake_compile(_, bars, __):
         entry = pd.Series(current["persistent"], index=bars.index)
@@ -425,14 +473,21 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     blocked = arena.step(object())
     assert any(action.get("action") == "BLOCKED" for action in blocked["actions"])
 
-    current.update(
-        state=saved["state"], cycle_offset_h=8,
-        funding_events=[(0, 0.0001), (8, 0.0008)])
     monkeypatch.setattr(arena, "MAX_TOTAL_POSITIONS", 6)
+    current.update(state=saved["state"], regime_allowed=False)
+    regime_blocked = arena.step(object())
+    assert not any(action.get("action") == "ENTRY"
+                   for action in regime_blocked["actions"])
+    assert any(action.get("reason") == "entry_guard"
+               for action in regime_blocked["actions"])
+
+    current.update(
+        state=saved["state"], cycle_offset_h=8, regime_allowed=True,
+        funding_events=[(0, 0.0001), (8, 0.0008)])
     funding_blocked = arena.step(object())
     assert not any(action.get("action") == "ENTRY"
                    for action in funding_blocked["actions"])
-    assert any(action.get("reason") == "funding_guard"
+    assert any(action.get("reason") == "entry_guard"
                for action in funding_blocked["actions"])
 
     current.update(state=saved["state"], funding_events=[(8, 0.0001)])

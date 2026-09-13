@@ -72,9 +72,11 @@ digest.py         daily Telegram-ready summary
 `iv_skew_above` (reserved)
 
 TA nodes declare their own `tf` (`4h` or `1d`), so a 4h trigger can be gated by
-an already-closed daily regime without lookahead. Specs can also set optional
-`exit.max_hold_bars` to cap slow-bleed position age. Existing specs that omit it
-retain signal/stop-only exits.
+an already-closed daily regime without lookahead. Entry funding nodes and
+higher-timeframe SMA nodes are persistent gates: `entry.all` gates must still
+pass if a fill is delayed, while `entry.any` preserves alternative-branch
+semantics. Specs can also set optional `exit.max_hold_bars` to cap slow-bleed
+position age. Existing specs that omit it retain signal/stop-only exits.
 
 A spec example lives in `spec_schema.demo_spec()`.
 

@@ -294,29 +294,57 @@ def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
     raise ValueError(f"unhandled node type {t}")
 
 
-def funding_entry_allowed(spec: dict, df: pd.DataFrame, ctx: Context,
-                          entry_ts: pd.Timestamp, as_of: float) -> bool:
+_TIMEFRAME_ORDER = {"4h": 0, "1d": 1}
+_PERSISTENT_REGIME_TYPES = {"price_above_sma", "price_below_sma"}
+_FUNDING_TYPES = {"funding_above", "funding_below"}
+
+
+def _is_persistent_entry_gate(spec: dict, node: dict) -> bool:
+    if node["type"] in _FUNDING_TYPES:
+        return True
+    asset_tf = (spec.get("asset") or {}).get("tf")
+    node_tf = node.get("tf")
+    return (node["type"] in _PERSISTENT_REGIME_TYPES
+            and asset_tf in _TIMEFRAME_ORDER
+            and node_tf in _TIMEFRAME_ORDER
+            and _TIMEFRAME_ORDER[node_tf] > _TIMEFRAME_ORDER[asset_tf])
+
+
+def _entry_gate_value(node: dict, df: pd.DataFrame, ctx: Context,
+                      as_of: float) -> bool:
+    decision_index = pd.DatetimeIndex([
+        pd.to_datetime(as_of, unit="s", utc=True)])
+    if node["type"] in _FUNDING_TYPES:
+        return bool(_funding_node_signal(node, decision_index, ctx).iloc[0])
+    decision_df = df.iloc[[-1]].copy()
+    decision_df.index = decision_index
+    return bool(_node_to_bool(node, decision_df, ctx).iloc[0])
+
+
+def delayed_entry_allowed(spec: dict, df: pd.DataFrame, ctx: Context,
+                          episode_start: pd.Timestamp, as_of: float) -> bool:
     entry = spec.get("entry") or {}
-    funding_types = ("funding_above", "funding_below")
-    mandatory = [node for node in entry.get("all") or []
-                 if node["type"] in funding_types]
-    now_index = pd.DatetimeIndex([pd.to_datetime(as_of, unit="s", utc=True)])
-    if not all(bool(_funding_node_signal(node, now_index, ctx).iloc[0])
-               for node in mandatory):
+    mandatory_gates = [node for node in entry.get("all") or []
+                       if _is_persistent_entry_gate(spec, node)]
+    if not all(_entry_gate_value(node, df, ctx, as_of)
+               for node in mandatory_gates):
         return False
 
     any_nodes = entry.get("any") or []
-    nonfunding = [node for node in any_nodes if node["type"] not in funding_types]
-    if any(bool(_node_to_bool(node, df, ctx).loc[entry_ts])
-           for node in nonfunding):
+    if not any_nodes:
+        return True
+    alternative_gates = [node for node in any_nodes
+                         if _is_persistent_entry_gate(spec, node)]
+    if any(_entry_gate_value(node, df, ctx, as_of)
+           for node in alternative_gates):
         return True
 
-    funding = [node for node in any_nodes if node["type"] in funding_types]
-    established = [node for node in funding
-                   if bool(_funding_node_signal(node, df.index, ctx).loc[entry_ts])]
-    return not funding or any(
-        bool(_funding_node_signal(node, now_index, ctx).iloc[0])
-        for node in established)
+    triggers = [node for node in any_nodes
+                if not _is_persistent_entry_gate(spec, node)]
+    decision_ts = pd.to_datetime(as_of, unit="s", utc=True)
+    episode = (df.index >= episode_start) & (df.index <= decision_ts)
+    return any(bool(_node_to_bool(node, df, ctx).loc[episode].any())
+               for node in triggers)
 
 
 def compile_signal(spec: dict, df: pd.DataFrame, ctx: Context) -> tuple[pd.Series, list[str]]:

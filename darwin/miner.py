@@ -43,7 +43,8 @@ NODE_CHEATSHEET = """
     score >= min_score. Equity/FX/gold data is live on the bus.
 TA-node tf: "1d" or "4h", equal to or higher than the asset tf. A 4h entry
 can require price_above_sma {period 200, tf "1d"}; a 1d strategy must use 1d
-nodes. Only completed higher-timeframe bars are visible.
+nodes. Entry funding nodes and higher-timeframe SMA nodes in entry.all are
+persistent gates and must still pass if a live fill is delayed.
 Exit safety field (not a node): exit.max_hold_bars is an integer 1-500 and caps
 position age in asset-timeframe bars. Symbols: XLMUSDT, DOGEUSDT, SOLUSDT,
 BTCUSDT, ETHUSDT.
@@ -244,7 +245,9 @@ Rules:
   regime/crowding veto. Extra AND conditions often never fire.
 - A TA node may use the asset tf or a higher tf, never a lower tf. For 4h
   entries, prefer a completed 1d trend node when broad-regime agreement matters;
-  every TA node in a 1d strategy must use 1d.
+  every TA node in a 1d strategy must use 1d. Put funding filters and daily SMA
+  regime vetoes in entry.all so they remain mandatory through delayed fills;
+  entry.any keeps its OR semantics.
 - Think about WHY each edge could exist (behavioral, flow, structure) and put it in provenance.thesis.
 - STUDY THE FAILURE REPORT below before proposing. Do not resubmit a thesis
   family that already died the same way (same mechanism + same asset + similar

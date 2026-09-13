@@ -25,7 +25,7 @@ import pandas as pd
 
 from .bus import EventBus
 from .engine import (Context, FEE, SLIPPAGE_BPS, compile_signal,
-                     funding_entry_allowed, load_klines, simulate)
+                     delayed_entry_allowed, load_klines, simulate)
 from .spec_schema import SPEC_DIR, load_spec
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -364,12 +364,12 @@ def step(bus: EventBus | None = None) -> dict:
         st = state[sid]
         if sid in _load_frozen():
             continue
-        if not funding_entry_allowed(
+        if not delayed_entry_allowed(
                 spec, df, ctx, signal_entry_ts, time.time()):
-            reason = "funding entry predicate false or unavailable"
+            reason = "persistent entry gate false or unavailable"
             _log_blocked_once(sid, spec, sym, last_ts, reason)
             actions.append({"spec_id": sid, "action": "BLOCKED",
-                            "reason": "funding_guard", "symbol": sym})
+                            "reason": "entry_guard", "symbol": sym})
             continue
         if n_open >= MAX_TOTAL_POSITIONS:
             reason = f"book cap {MAX_TOTAL_POSITIONS} positions"
