@@ -10,7 +10,8 @@ Structure:
   "created_ts": ..., "provenance": {"mined_from": [dedup_keys...], "model": "..."},
   "asset": {"class": "crypto", "symbol": "DOGEUSDT", "tf": "1d"},
   "entry": {"all": [node...], "any": [node...]},
-  "exit":  {"all": [...], "any": [...], "stops": {"trail_pct": 0.2}},
+  "exit":  {"all": [...], "any": [...], "max_hold_bars": 24,
+             "stops": {"trail_pct": 0.2}},
   "risk":  {"leverage": 3, "max_pos_frac": 0.3, "cooldown_bars": 2},
   "direction": "long",           # long-only v1
   "confidence": 0.55             # Miner's prior; gauntlet re-scores it
@@ -42,6 +43,9 @@ NODE_TYPES: dict[str, dict] = {
     "vol_spike":          {"mult": (int, float), "lookback": int, "tf": str},
     "drawdown_from_high": {"pct": (int, float), "lookback_d": int},
     "runup_from_low":     {"pct": (int, float), "lookback_d": int},
+    # --- crypto perp positioning (realized 8h settlement rate) ---
+    "funding_above":      {"threshold": (int, float)},
+    "funding_below":      {"threshold": (int, float)},
     # --- news (finlight / alphai events on the bus) ---
     "news_sentiment_below": {"threshold": (int, float), "window_h": (int, float),
                              "min_conf": (int, float)},
@@ -92,6 +96,7 @@ _JSON_SCHEMA = {
             "properties": {
                 "all": {"type": "array", "items": {"$ref": "#/$defs/node"}},
                 "any": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+                "max_hold_bars": {"type": "integer", "minimum": 1, "maximum": 500},
                 "stops": {
                     "type": "object",
                     "properties": {
@@ -131,6 +136,15 @@ _PARAM_LIMITS = {
     "tf": None, "assets": None,
 }
 
+# Parameter names are mostly shared across node families. These two limits are
+# deliberately node-specific: Binance's realized 8h funding rate is a fraction,
+# not the 0..100-style scale used by RSI and fear/greed thresholds.
+_NODE_PARAM_LIMITS = {
+    ("funding_above", "threshold"): (-0.01, 0.01),
+    ("funding_below", "threshold"): (-0.01, 0.01),
+}
+_NODE_PARAM_VALUES = {"tf": {"4h", "1d"}}
+
 
 def _check_nodes(spec: dict, errors: list[str]) -> None:
     for section in ("entry", "exit"):
@@ -157,9 +171,13 @@ def _check_nodes(spec: dict, errors: list[str]) -> None:
                 if k not in node:
                     errors.append(f"{section}/{ntype}: missing param '{k}'")
                     continue
-                lim = _PARAM_LIMITS.get(k)
+                lim = _NODE_PARAM_LIMITS.get((ntype, k), _PARAM_LIMITS.get(k))
                 if lim and not (lim[0] <= node[k] <= lim[1]):
                     errors.append(f"{section}/{ntype}: param '{k}'={node[k]} out of range {lim}")
+                values = _NODE_PARAM_VALUES.get(k)
+                if values and node[k] not in values:
+                    errors.append(f"{section}/{ntype}: param '{k}'={node[k]!r} not in "
+                                  f"{sorted(values)}")
 
 
 def validate_spec(spec: dict) -> list[str]:

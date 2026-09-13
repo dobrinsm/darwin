@@ -53,6 +53,9 @@ PARAM_GRIDS: dict[str, dict[str, list]] = {
                              "lookback_d": [20, 30, 45, 60]},
     "runup_from_low":       {"pct": [0.15, 0.2, 0.25, 0.3, 0.4],
                              "lookback_d": [30, 45, 60, 90]},
+    "funding_above":        {"threshold": [0.0, 0.0001, 0.0003, 0.0005]},
+    "funding_below":        {"threshold": [-0.0005, -0.0003, -0.0001, 0.0,
+                                             0.0001, 0.0003]},
     "fear_greed_below":     {"threshold": [25, 35, 45, 55, 65, 80]},
     "fear_greed_above":     {"threshold": [35, 45, 55, 65, 75]},
     "news_sentiment_above": {"threshold": [-0.2, 0.0, 0.2],
@@ -67,6 +70,9 @@ PARAM_GRIDS: dict[str, dict[str, list]] = {
 STOPS_GRID: dict[str, list] = {
     "trail_pct": [0.1, 0.15, 0.2, 0.25, 0.3],
     "hard_pct": [0.08, 0.1, 0.15, 0.2],
+}
+EXIT_PARAM_GRIDS: dict[str, list] = {
+    "max_hold_bars": [3, 6, 12, 24, 48, 90],
 }
 
 
@@ -94,13 +100,22 @@ def _apply_stop(spec: dict, pname: str, value) -> dict:
     return m
 
 
+def _apply_exit_param(spec: dict, pname: str, value) -> dict:
+    m = copy.deepcopy(spec)
+    m.setdefault("exit", {})[pname] = value
+    return m
+
+
 def _spec_key(spec: dict) -> str:
     """Canonical identity of the mutable surface (params only)."""
     nodes = [[n.get("type"), {k: v for k, v in n.items() if k != "type"}]
              for _, _, _, n in _node_targets(spec)]
-    stops = (spec.get("exit") or {}).get("stops") or {}
+    exit_ = spec.get("exit") or {}
+    stops = exit_.get("stops") or {}
+    exit_params = {k: v for k, v in exit_.items()
+                   if k not in ("all", "any", "stops")}
     risk = spec.get("risk") or {}
-    return json.dumps([nodes, stops, risk], sort_keys=True)
+    return json.dumps([nodes, exit_params, stops, risk], sort_keys=True)
 
 
 def _mutations_for_node(node: dict) -> list[tuple[str, object]]:
@@ -151,6 +166,20 @@ def enumerate_mutations(spec: dict, cap: int = MAX_CANDIDATES,
             seen.add(k)
             singles.append(((f"exit.stops.{pname}", pname, v), m))
 
+    exit_ = spec.get("exit") or {}
+    for pname, values in EXIT_PARAM_GRIDS.items():
+        if pname not in exit_:
+            continue
+        for v in values:
+            if exit_[pname] == v:
+                continue
+            m = _apply_exit_param(spec, pname, v)
+            k = _spec_key(m)
+            if k in seen:
+                continue
+            seen.add(k)
+            singles.append(((f"exit.{pname}", pname, v), m))
+
     out = [m for _, m in singles]
     if len(out) >= cap:
         return out[:cap]
@@ -167,6 +196,8 @@ def enumerate_mutations(spec: dict, cap: int = MAX_CANDIDATES,
             sec, lst, ni = None, None, None
             if t2.startswith("exit.stops."):
                 m = _apply_stop(m1, p2, v2)
+            elif t2.startswith("exit."):
+                m = _apply_exit_param(m1, p2, v2)
             else:
                 target, _, _ = t2.rpartition("[")
                 sec, lst = t2.split(".")[0], t2.split(".")[1].split("[")[0]

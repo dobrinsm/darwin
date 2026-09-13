@@ -175,35 +175,52 @@ def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
     def _reindex(s: pd.Series) -> pd.Series:
         return s.reindex(idx, method="ffill")
 
+    def _tf_signal(evaluate) -> pd.Series:
+        """Evaluate a TA node on its declared timeframe, then expose only the
+        latest fully closed value at each base-bar close. Reindexing with
+        forward-fill can never select a source timestamp later than the
+        decision timestamp."""
+        other = df if node["tf"] == ctx.base_tf else ctx.tf_df(node["tf"])
+        signal = evaluate(other)
+        if other is df:
+            return signal
+        return _reindex(signal.astype(float)).fillna(0.0) > 0
+
     if t == "price_above_sma":
-        return c > _sma(c, node["period"])
+        return _tf_signal(lambda o: o["close"] > _sma(o["close"], node["period"]))
     if t == "price_below_sma":
-        return c < _sma(c, node["period"])
+        return _tf_signal(lambda o: o["close"] < _sma(o["close"], node["period"]))
     if t == "ema_cross_up":
-        if node["tf"] == ctx.base_tf:
-            return _crossed_up(_ema(c, node["fast"]), _ema(c, node["slow"]))
-        o = ctx.tf_df(node["tf"])
-        sig = _crossed_up(_ema(o["close"], node["fast"]), _ema(o["close"], node["slow"]))
-        return _reindex(sig.astype(float)).fillna(0.0) > 0
+        return _tf_signal(lambda o: _crossed_up(
+            _ema(o["close"], node["fast"]), _ema(o["close"], node["slow"])))
     if t == "ema_cross_down":
-        if node["tf"] == ctx.base_tf:
-            return _crossed_down(_ema(c, node["fast"]), _ema(c, node["slow"]))
-        o = ctx.tf_df(node["tf"])
-        sig = _crossed_down(_ema(o["close"], node["fast"]), _ema(o["close"], node["slow"]))
-        return _reindex(sig.astype(float)).fillna(0.0) > 0
+        return _tf_signal(lambda o: _crossed_down(
+            _ema(o["close"], node["fast"]), _ema(o["close"], node["slow"])))
     if t == "rsi_below":
-        return _rsi(c, node["period"]) < node["threshold"]
+        return _tf_signal(lambda o: _rsi(o["close"], node["period"])
+                          < node["threshold"])
     if t == "rsi_above":
-        return _rsi(c, node["period"]) > node["threshold"]
+        return _tf_signal(lambda o: _rsi(o["close"], node["period"])
+                          > node["threshold"])
     if t == "vol_spike":
-        vavg = df["volume"].rolling(node["lookback"]).mean().shift(1)
-        return df["volume"] > node["mult"] * vavg
+        def _volume_signal(o: pd.DataFrame) -> pd.Series:
+            vavg = o["volume"].rolling(node["lookback"]).mean().shift(1)
+            return o["volume"] > node["mult"] * vavg
+        return _tf_signal(_volume_signal)
     if t == "drawdown_from_high":
         roll_hi = c.rolling(node["lookback_d"]).max()
         return (c / roll_hi - 1) < -node["pct"]
     if t == "runup_from_low":
         roll_lo = c.rolling(node["lookback_d"]).min()
         return (c / roll_lo - 1) > node["pct"]
+    if t in ("funding_above", "funding_below"):
+        if ctx.funding.empty:
+            return pd.Series(False, index=idx)
+        # Realized settlement facts are indexed by settlement time. ffill at
+        # each bar close therefore reads only the latest rate already known.
+        known = ctx.funding.reindex(idx, method="ffill")
+        return ((known > node["threshold"]) if t == "funding_above"
+                else (known < node["threshold"])).fillna(False)
     if t in ("fear_greed_below", "fear_greed_above"):
         if ctx.fg.empty:
             return pd.Series(False, index=idx)
@@ -287,6 +304,8 @@ def compile_signal(spec: dict, df: pd.DataFrame, ctx: Context) -> tuple[pd.Serie
                 gaps.append(f"{section}:{ntype}:needs_finlight")
             if ntype.startswith("wsb_") and not ctx.sources_present["wsb"]:
                 gaps.append(f"{section}:{ntype}:needs_wsb")
+            if ntype.startswith("funding_") and not ctx.sources_present["funding"]:
+                gaps.append(f"{section}:{ntype}:needs_funding")
 
     def combine(sec, default):
         all_nodes = sec.get("all") or []
@@ -319,6 +338,7 @@ def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
     lev = spec["risk"]["leverage"]
     max_frac = spec["risk"]["max_pos_frac"]
     cooldown = spec["risk"].get("cooldown_bars", 0)
+    max_hold = spec.get("exit", {}).get("max_hold_bars")
     trail = (spec.get("exit", {}).get("stops") or {}).get("trail_pct")
     hard = (spec.get("exit", {}).get("stops") or {}).get("hard_pct")
 
@@ -332,6 +352,7 @@ def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
     pos = np.zeros(len(df))
     state = 0
     bars_since_exit = 10**9
+    bars_held = 0
     entry_px = np.nan
     peak = np.nan
     rets = df["close"].pct_change().fillna(0.0).to_numpy()
@@ -343,11 +364,18 @@ def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
             bars_since_exit += 1
             if entry_sig.iloc[i] and bars_since_exit > cooldown:
                 state = 1
+                bars_held = 0
                 entry_px = closes[i]
                 peak = closes[i]
         else:
+            # The entry signal is known at close t and first earns the t->t+1
+            # return. Exiting when this reaches N therefore permits exactly N
+            # subsequent held-bar returns and no (N+1)th return.
+            bars_held += 1
             peak = max(peak, closes[i])
             exit_now = bool(exit_sig.iloc[i])
+            if max_hold is not None and bars_held >= max_hold:
+                exit_now = True
             if trail is not None and closes[i] < peak * (1 - trail):
                 exit_now = True
             if hard is not None and closes[i] < entry_px * (1 - hard):

@@ -51,8 +51,8 @@ darwin/
   backfill.py     history: binance 1d/4h to 2020, perp funding to listing,
                   fear&greed to 2019, LSE cross-asset
   spec_schema.py  the SPEC contract: JSON-schema'd node DAG, strict param ranges
-  engine.py       spec compiler → point-in-time backtest (fee + slippage +
-                  realized funding on held notional)
+  engine.py       spec compiler → point-in-time, cross-timeframe backtest
+                  (fee + slippage + realized funding on held notional)
   gauntlet.py     walk-forward judge: 12mo IS / 6mo OOS rolling windows,
                   leave-one-out OOS sharpe in every report
   optimizer.py    MUTATE loop: bounded grid search per seed, OOS-anchored
@@ -66,9 +66,15 @@ digest.py         daily Telegram-ready summary
 ## Node vocabulary (what the Miner can compose)
 
 `price_above_sma` · `ema_cross_up/down` · `rsi_below/above` · `vol_spike` ·
-`drawdown_from_high` · `runup_from_low` · `fear_greed_below/above` · `wsb_rank_above` ·
-`news_sentiment_below/above` · `convergence` (smart money) · `cross_asset_score`
-(equities/FX/gold momentum vote) · `iv_skew_above` (reserved)
+`drawdown_from_high` · `runup_from_low` · `funding_above/below` ·
+`fear_greed_below/above` · `wsb_rank_above` · `news_sentiment_below/above` ·
+`convergence` (smart money) · `cross_asset_score` (equities/FX/gold momentum vote) ·
+`iv_skew_above` (reserved)
+
+TA nodes declare their own `tf` (`4h` or `1d`), so a 4h trigger can be gated by
+an already-closed daily regime without lookahead. Specs can also set optional
+`exit.max_hold_bars` to cap slow-bleed position age. Existing specs that omit it
+retain signal/stop-only exits.
 
 A spec example lives in `spec_schema.demo_spec()`.
 
