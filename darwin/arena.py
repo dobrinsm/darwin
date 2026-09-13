@@ -16,13 +16,16 @@ Virtual book: 10,000 USDT margin per spec, long-only.
 """
 from __future__ import annotations
 
+import copy
 import json
 import time
 from pathlib import Path
 
+import pandas as pd
+
 from .bus import EventBus
-from .engine import (Context, FEE, SLIPPAGE_BPS, compile_signal, load_klines,
-                     simulate)
+from .engine import (Context, FEE, SLIPPAGE_BPS, compile_signal,
+                     delayed_entry_allowed, load_klines, simulate)
 from .spec_schema import SPEC_DIR, load_spec
 
 DATA = Path(__file__).resolve().parent.parent / "data"
@@ -236,16 +239,40 @@ def step(bus: EventBus | None = None) -> dict:
     # ---- Phase 1: evaluate every spec -> desired position + gauntlet rank.
     # Rank = LOO sharpe of the latest report: the book fills with the most
     # robust specs first when caps bite, not in arbitrary filesystem order.
-    evals = []   # (loo_rank, sid, spec, sym, lev, desired, last_close, last_ts, gaps)
+    evals = []   # (rank, sid, spec, sym, lev, desired, time_exit, px, ts, gaps, entry_ts, df, ctx)
     for spec in live.values():
         sid = spec["spec_id"]
         sym, tf = spec["asset"]["symbol"], spec["asset"]["tf"]
         lev = spec["risk"]["leverage"]
+        live_state = state.get(sid) or {}
         try:
             df = load_klines(bus, sym, tf)
             ctx = Context(bus, sym, tf, df.index)
             e_sig, x_sig, gaps = compile_signal(spec, df, ctx)
-            net, frame = simulate(spec, df, e_sig, x_sig, ctx)
+            replay_spec = copy.deepcopy(spec)
+            replay_spec.get("exit", {}).pop("max_hold_bars", None)
+            replay_start = live_state.get("time_exit_ts")
+            signal_entry_ts = None
+            if replay_start is None:
+                _, frame = simulate(replay_spec, df, e_sig, x_sig, ctx)
+                desired = int(frame["position"].iloc[-1])
+            else:
+                after_exit = df.index > pd.to_datetime(
+                    replay_start, unit="s", utc=True)
+                if after_exit.any():
+                    replay_entry = e_sig.loc[after_exit].copy()
+                    cooldown = spec["risk"].get("cooldown_bars", 0)
+                    replay_entry.iloc[:cooldown] = False
+                    _, frame = simulate(
+                        replay_spec, df.loc[after_exit], replay_entry,
+                        x_sig.loc[after_exit], ctx)
+                    desired = int(frame["position"].iloc[-1])
+                else:
+                    desired = 0
+            if desired:
+                entries = ((frame["position"] == 1)
+                           & (frame["position"].shift(1, fill_value=0) == 0))
+                signal_entry_ts = frame.index[entries][-1]
         except Exception as e:
             actions.append({"spec_id": sid, "error": str(e)[:120]})
             continue
@@ -256,16 +283,21 @@ def step(bus: EventBus | None = None) -> dict:
                 loo_rank = float(json.loads(rep_p.read_text()).get("oos_loo_sharpe") or 0)
             except Exception:
                 pass
-        evals.append((loo_rank, sid, spec, sym, lev,
-                      int(frame["position"].iloc[-1]),
+        entry_ts = live_state.get("entry_ts")
+        max_hold = (spec.get("exit") or {}).get("max_hold_bars")
+        bars_held = 0 if entry_ts is None else int(
+            (df.index > pd.to_datetime(entry_ts, unit="s", utc=True)).sum())
+        time_exit = max_hold is not None and bars_held >= max_hold
+        evals.append((loo_rank, sid, spec, sym, lev, desired, time_exit,
                       float(df["close"].iloc[-1]),
                       float(df.index[-1].timestamp()),  # type: ignore[attr-defined]
-                      gaps))
+                      gaps, signal_entry_ts, df, ctx))
 
     # ---- Phase 2: exits + mark-to-market + funding + freeze checks.
     # Exits are NEVER gated by book risk.
-    pending_entries = []   # (loo_rank, sid, spec, sym, lev, last_close, last_ts, gaps)
-    for loo_rank, sid, spec, sym, lev, desired, last_close, last_ts, gaps in evals:
+    pending_entries = []   # (rank, sid, spec, sym, lev, px, ts, gaps, entry_ts, df, ctx)
+    for (loo_rank, sid, spec, sym, lev, desired, time_exit,
+         last_close, last_ts, gaps, signal_entry_ts, df, ctx) in evals:
         st = state.get(sid, {"in_pos": 0, "entry_px": None, "entry_ts": None,
                              "equity": START_EQ})
         # backfill: positions opened before the cost model stamped no `symbol`
@@ -301,7 +333,7 @@ def step(bus: EventBus | None = None) -> dict:
                 actions.append({"spec_id": sid, "action": "FROZEN",
                                 "equity": st["equity"]})
 
-        if desired == 0 and st.get("in_pos"):
+        if (desired == 0 or time_exit) and st.get("in_pos"):
             m = _close_math(st, last_close)
             m["equity_after"] = st["equity"]
             _log_trade({"ts": last_ts, "spec_id": sid, "name": spec["name"],
@@ -310,9 +342,12 @@ def step(bus: EventBus | None = None) -> dict:
                             "pnl_usd": m["pnl_net"]})
             st.update(in_pos=0, entry_px=None, entry_ts=None, coins=None,
                       unrealized=0.0, mark=last_close)
+            if time_exit:
+                st["time_exit_ts"] = last_ts
         elif desired == 1 and not st.get("in_pos"):
             pending_entries.append((loo_rank, sid, spec, sym, lev,
-                                    last_close, last_ts, gaps))
+                                    last_close, last_ts, gaps,
+                                    signal_entry_ts, df, ctx))
         state[sid] = st
 
     # ---- Phase 3: entries under book-level caps, best-LOO first.
@@ -324,10 +359,17 @@ def step(bus: EventBus | None = None) -> dict:
         sy = s.get("symbol") or "?"
         sym_count[sy] = sym_count.get(sy, 0) + 1
 
-    for loo_rank, sid, spec, sym, lev, last_close, last_ts, gaps in sorted(
-            pending_entries, key=lambda e: -e[0]):
+    for (loo_rank, sid, spec, sym, lev, last_close, last_ts, gaps,
+         signal_entry_ts, df, ctx) in sorted(pending_entries, key=lambda e: -e[0]):
         st = state[sid]
         if sid in _load_frozen():
+            continue
+        if not delayed_entry_allowed(
+                spec, df, ctx, signal_entry_ts, time.time()):
+            reason = "persistent entry gate false or unavailable"
+            _log_blocked_once(sid, spec, sym, last_ts, reason)
+            actions.append({"spec_id": sid, "action": "BLOCKED",
+                            "reason": "entry_guard", "symbol": sym})
             continue
         if n_open >= MAX_TOTAL_POSITIONS:
             reason = f"book cap {MAX_TOTAL_POSITIONS} positions"

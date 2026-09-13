@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.request
 from pathlib import Path
 
 from .bus import EventBus
 from .engine import load_klines
-from .spec_schema import NODE_TYPES, SPEC_DIR, validate_spec, save_spec
+from .spec_schema import SPEC_DIR, save_spec, validate_spec
 
 MODEL = os.environ.get("DARWIN_MINER_MODEL", "google/gemini-2.5-flash")
 MAX_PROPOSALS = 3
@@ -25,6 +26,10 @@ NODE_CHEATSHEET = """
 - rsi_below {period 2-400, threshold -5..105, tf} / rsi_above
 - vol_spike {mult 1-20, lookback 3-500, tf}
 - drawdown_from_high {pct 0.01-0.95, lookback_d 3-500} / runup_from_low
+- funding_above {threshold -0.01..0.01} / funding_below
+    threshold is the realized 8h perp funding fraction (0.0001 = 0.01%).
+    Positive funding means longs pay shorts; funding_below is a long-entry
+    crowding/carry veto and funding_above can force an exit from crowded longs.
 - fear_greed_below {threshold 0-100} / fear_greed_above
 - wsb_rank_above {rank 1-50}
 - news_sentiment_below {threshold -1..1, window_h 1-720, min_conf 0-1} / news_sentiment_above
@@ -36,7 +41,13 @@ NODE_CHEATSHEET = """
 - cross_asset_score {min_score 0-5, assets ["SPY","QQQ","EUR","XAU"], mom_h 24-336}
     counts how many of those assets have positive momentum; entry requires
     score >= min_score. Equity/FX/gold data is live on the bus.
-tf: "1d" or "4h". Symbols: XLMUSDT, DOGEUSDT, SOLUSDT, BTCUSDT, ETHUSDT.
+TA-node tf: "1d" or "4h", equal to or higher than the asset tf. A 4h entry
+can require price_above_sma {period 200, tf "1d"}; a 1d strategy must use 1d
+nodes. Entry funding nodes and higher-timeframe SMA nodes in entry.all are
+persistent gates and must still pass if a live fill is delayed.
+Exit safety field (not a node): exit.max_hold_bars is an integer 1-500 and caps
+position age in asset-timeframe bars. Symbols: XLMUSDT, DOGEUSDT, SOLUSDT,
+BTCUSDT, ETHUSDT.
 """
 
 
@@ -60,6 +71,15 @@ def bus_snapshot(bus: EventBus) -> str:
             ath_dd = c.iloc[-1] / c.rolling(365).max().iloc[-1] - 1
             lines.append(f"{sym}: 30d={r30*100:+.1f}% 90d={r90*100:+.1f}% "
                          f"ann.vol={vol:.0f}% dd-from-365d-high={ath_dd*100:+.1f}%")
+            funding = bus.read(event_type="funding", source="binance",
+                               symbol=sym.replace("USDT", ""), limit=90)
+            if funding and 0 <= time.time() - funding[0].ts <= 8 * 3600:
+                rates = [float(e.payload.get("rate") or 0.0) for e in funding]
+                latest = rates[0]
+                avg = sum(rates) / len(rates)
+                lines.append(f"{sym} FUNDING: latest-8h={latest*100:+.4f}% "
+                             f"recent-avg={avg*100:+.4f}% "
+                             "(positive=longs pay)")
         except Exception:
             continue
     wsb = bus.read(event_type="wsb_sentiment", limit=10)
@@ -213,12 +233,21 @@ strategy specs, and the specs that already exist.
 Propose up to @@MAXPROPOSALS@@ NEW long-only crypto strategies as JSON specs.
 Rules:
 - Each spec: {"name", "asset":{"class":"crypto","symbol","tf"}, "direction":"long",
-  "entry":{"all":[...],"any":[...]}, "exit":{"any":[...],"stops":{"trail_pct"|"hard_pct"}},
+  "entry":{"all":[...],"any":[...]}, "exit":{"any":[...],"max_hold_bars":1-500,
+  "stops":{"trail_pct"|"hard_pct"}},
   "risk":{"leverage" 1-3, "max_pos_frac" 0.05-0.5, "cooldown_bars" 0-10}, "confidence" 0-1,
   "provenance":{"thesis":"one sentence WHY this edge exists"}}
 - Long-only. Trends get entered on confirmation, fades get entered on extremes.
 - Be NOVEL vs existing specs (different asset, timeframe, or mechanism).
-- exit.any should contain the mirror of the entry mechanism.
+- exit.any should contain the mirror of the entry mechanism; add max_hold_bars
+  when the thesis should expire rather than bleed indefinitely.
+- Keep entries compact: normally one trigger plus at most one independent
+  regime/crowding veto. Extra AND conditions often never fire.
+- A TA node may use the asset tf or a higher tf, never a lower tf. For 4h
+  entries, prefer a completed 1d trend node when broad-regime agreement matters;
+  every TA node in a 1d strategy must use 1d. Put funding filters and daily SMA
+  regime vetoes in entry.all so they remain mandatory through delayed fills;
+  entry.any keeps its OR semantics.
 - Think about WHY each edge could exist (behavioral, flow, structure) and put it in provenance.thesis.
 - STUDY THE FAILURE REPORT below before proposing. Do not resubmit a thesis
   family that already died the same way (same mechanism + same asset + similar
@@ -232,18 +261,18 @@ CRITICAL NODE FORMAT — every node is an object with a "type" KEY plus flat par
 WRONG (will be rejected):  {"rsi_below": {"period": 14}}
 FULL EXAMPLE SPEC:
 [
-  {"name": "example trend with froth veto",
-   "asset": {"class": "crypto", "symbol": "DOGEUSDT", "tf": "1d"},
+  {"name": "example 4h pullback in daily uptrend",
+   "asset": {"class": "crypto", "symbol": "BTCUSDT", "tf": "4h"},
    "direction": "long",
    "entry": {"all": [
-       {"type": "ema_cross_up", "fast": 20, "slow": 100, "tf": "1d"},
-       {"type": "fear_greed_below", "threshold": 80}]},
+       {"type": "rsi_below", "period": 14, "threshold": 35, "tf": "4h"},
+       {"type": "price_above_sma", "period": 200, "tf": "1d"}]},
    "exit": {"any": [
-       {"type": "ema_cross_down", "fast": 20, "slow": 100, "tf": "1d"}],
-       "stops": {"trail_pct": 0.25}},
-   "risk": {"leverage": 3, "max_pos_frac": 0.3, "cooldown_bars": 2},
+       {"type": "rsi_above", "period": 14, "threshold": 65, "tf": "4h"}],
+       "max_hold_bars": 18, "stops": {"hard_pct": 0.1}},
+   "risk": {"leverage": 2, "max_pos_frac": 0.25, "cooldown_bars": 2},
    "confidence": 0.5,
-   "provenance": {"thesis": "trend entries avoided when retail euphoria peaks"}}
+   "provenance": {"thesis": "4h pullbacks expire quickly and only trade with the closed daily regime"}}
 ]
 
 NODE VOCABULARY (params in {}):
@@ -332,7 +361,6 @@ def mine(bus: EventBus | None = None) -> dict:
                       "thesis": (pr.get("provenance") or {}).get("thesis", "")})
     log_path = Path(__file__).resolve().parent.parent / "data" / "miner_log.jsonl"
     with log_path.open("a") as f:
-        import time
         f.write(json.dumps({"ts": time.time(), "model": MODEL,
                             "saved": saved, "rejected": rejected}) + "\n")
     return {"saved": saved, "rejected": rejected, "snapshot": snapshot}

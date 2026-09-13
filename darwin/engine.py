@@ -3,10 +3,13 @@
 Point-in-time rules (the invariants):
 1. Signals are computed on bar closes; the position acts on the NEXT bar
    (position.shift(1)) — no lookahead, ever.
-2. Event nodes (sentiment, wsb, fear-greed, convergence) read the bus with
-   as_of = bar close time. The bus only ever returns events with ts <= as_of.
+2. Event nodes (funding, sentiment, WSB, fear-greed, convergence) use only
+   events with ts <= the decision time; funding predicates also reject
+   settlements more than eight hours old.
 3. Cross-timeframe nodes use bars whose close_ts <= the decision bar's close_ts.
-4. Same inputs -> same outputs. No I/O during the run after materialization.
+4. Delayed arena entries revalidate funding and higher-timeframe SMA gates at
+   the actual fill boundary, preserving the entry expression's Boolean logic.
+5. Same inputs -> same outputs. No I/O during the run after materialization.
 """
 from __future__ import annotations
 
@@ -14,7 +17,6 @@ import numpy as np
 import pandas as pd
 
 from .bus import EventBus
-from .spec_schema import NODE_TYPES
 
 FEE = 0.0005          # Binance taker per side, on notional
 SLIPPAGE_BPS = 2.0    # adverse fill per side on notional (liquid top-slice)
@@ -166,6 +168,17 @@ class Context:
         return self._tf_cache[tf]
 
 
+def _funding_node_signal(node: dict, index: pd.DatetimeIndex,
+                         ctx: Context) -> pd.Series:
+    if ctx.funding.empty:
+        return pd.Series(False, index=index)
+    known = ctx.funding.reindex(
+        index, method="ffill", tolerance=pd.Timedelta(hours=8))
+    result = (known > node["threshold"] if node["type"] == "funding_above"
+              else known < node["threshold"])
+    return result.fillna(False)
+
+
 def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
     """Evaluate one node -> boolean Series on df.index. Point-in-time safe."""
     t = node["type"]
@@ -175,35 +188,46 @@ def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
     def _reindex(s: pd.Series) -> pd.Series:
         return s.reindex(idx, method="ffill")
 
+    def _tf_signal(evaluate) -> pd.Series:
+        """Evaluate a TA node on its declared timeframe, then expose only the
+        latest fully closed value at each base-bar close. Reindexing with
+        forward-fill can never select a source timestamp later than the
+        decision timestamp."""
+        other = df if node["tf"] == ctx.base_tf else ctx.tf_df(node["tf"])
+        signal = evaluate(other)
+        if other is df:
+            return signal
+        return _reindex(signal.astype(float)).fillna(0.0) > 0
+
     if t == "price_above_sma":
-        return c > _sma(c, node["period"])
+        return _tf_signal(lambda o: o["close"] > _sma(o["close"], node["period"]))
     if t == "price_below_sma":
-        return c < _sma(c, node["period"])
+        return _tf_signal(lambda o: o["close"] < _sma(o["close"], node["period"]))
     if t == "ema_cross_up":
-        if node["tf"] == ctx.base_tf:
-            return _crossed_up(_ema(c, node["fast"]), _ema(c, node["slow"]))
-        o = ctx.tf_df(node["tf"])
-        sig = _crossed_up(_ema(o["close"], node["fast"]), _ema(o["close"], node["slow"]))
-        return _reindex(sig.astype(float)).fillna(0.0) > 0
+        return _tf_signal(lambda o: _crossed_up(
+            _ema(o["close"], node["fast"]), _ema(o["close"], node["slow"])))
     if t == "ema_cross_down":
-        if node["tf"] == ctx.base_tf:
-            return _crossed_down(_ema(c, node["fast"]), _ema(c, node["slow"]))
-        o = ctx.tf_df(node["tf"])
-        sig = _crossed_down(_ema(o["close"], node["fast"]), _ema(o["close"], node["slow"]))
-        return _reindex(sig.astype(float)).fillna(0.0) > 0
+        return _tf_signal(lambda o: _crossed_down(
+            _ema(o["close"], node["fast"]), _ema(o["close"], node["slow"])))
     if t == "rsi_below":
-        return _rsi(c, node["period"]) < node["threshold"]
+        return _tf_signal(lambda o: _rsi(o["close"], node["period"])
+                          < node["threshold"])
     if t == "rsi_above":
-        return _rsi(c, node["period"]) > node["threshold"]
+        return _tf_signal(lambda o: _rsi(o["close"], node["period"])
+                          > node["threshold"])
     if t == "vol_spike":
-        vavg = df["volume"].rolling(node["lookback"]).mean().shift(1)
-        return df["volume"] > node["mult"] * vavg
+        def _volume_signal(o: pd.DataFrame) -> pd.Series:
+            vavg = o["volume"].rolling(node["lookback"]).mean().shift(1)
+            return o["volume"] > node["mult"] * vavg
+        return _tf_signal(_volume_signal)
     if t == "drawdown_from_high":
         roll_hi = c.rolling(node["lookback_d"]).max()
         return (c / roll_hi - 1) < -node["pct"]
     if t == "runup_from_low":
         roll_lo = c.rolling(node["lookback_d"]).min()
         return (c / roll_lo - 1) > node["pct"]
+    if t in ("funding_above", "funding_below"):
+        return _funding_node_signal(node, idx, ctx)
     if t in ("fear_greed_below", "fear_greed_above"):
         if ctx.fg.empty:
             return pd.Series(False, index=idx)
@@ -272,7 +296,61 @@ def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
     raise ValueError(f"unhandled node type {t}")
 
 
-def compile_signal(spec: dict, df: pd.DataFrame, ctx: Context) -> tuple[pd.Series, list[str]]:
+_TIMEFRAME_ORDER = {"4h": 0, "1d": 1}
+_PERSISTENT_REGIME_TYPES = {"price_above_sma", "price_below_sma"}
+_FUNDING_TYPES = {"funding_above", "funding_below"}
+
+
+def _is_persistent_entry_gate(spec: dict, node: dict) -> bool:
+    if node["type"] in _FUNDING_TYPES:
+        return True
+    asset_tf = (spec.get("asset") or {}).get("tf")
+    node_tf = node.get("tf")
+    return (node["type"] in _PERSISTENT_REGIME_TYPES
+            and asset_tf in _TIMEFRAME_ORDER
+            and node_tf in _TIMEFRAME_ORDER
+            and _TIMEFRAME_ORDER[node_tf] > _TIMEFRAME_ORDER[asset_tf])
+
+
+def _entry_gate_value(node: dict, df: pd.DataFrame, ctx: Context,
+                      as_of: float) -> bool:
+    decision_index = pd.DatetimeIndex([
+        pd.to_datetime(as_of, unit="s", utc=True)])
+    if node["type"] in _FUNDING_TYPES:
+        return bool(_funding_node_signal(node, decision_index, ctx).iloc[0])
+    decision_df = df.iloc[[-1]].copy()
+    decision_df.index = decision_index
+    return bool(_node_to_bool(node, decision_df, ctx).iloc[0])
+
+
+def delayed_entry_allowed(spec: dict, df: pd.DataFrame, ctx: Context,
+                          episode_start: pd.Timestamp, as_of: float) -> bool:
+    entry = spec.get("entry") or {}
+    mandatory_gates = [node for node in entry.get("all") or []
+                       if _is_persistent_entry_gate(spec, node)]
+    if not all(_entry_gate_value(node, df, ctx, as_of)
+               for node in mandatory_gates):
+        return False
+
+    any_nodes = entry.get("any") or []
+    if not any_nodes:
+        return True
+    alternative_gates = [node for node in any_nodes
+                         if _is_persistent_entry_gate(spec, node)]
+    if any(_entry_gate_value(node, df, ctx, as_of)
+           for node in alternative_gates):
+        return True
+
+    triggers = [node for node in any_nodes
+                if not _is_persistent_entry_gate(spec, node)]
+    decision_ts = pd.to_datetime(as_of, unit="s", utc=True)
+    episode = (df.index >= episode_start) & (df.index <= decision_ts)
+    return any(bool(_node_to_bool(node, df, ctx).loc[episode].any())
+               for node in triggers)
+
+
+def compile_signal(spec: dict, df: pd.DataFrame,
+                   ctx: Context) -> tuple[pd.Series, pd.Series, list[str]]:
     """Return boolean entry/exit Series + list of data gaps found."""
     gaps = []
     for section in ("entry", "exit"):
@@ -287,6 +365,8 @@ def compile_signal(spec: dict, df: pd.DataFrame, ctx: Context) -> tuple[pd.Serie
                 gaps.append(f"{section}:{ntype}:needs_finlight")
             if ntype.startswith("wsb_") and not ctx.sources_present["wsb"]:
                 gaps.append(f"{section}:{ntype}:needs_wsb")
+            if ntype.startswith("funding_") and not ctx.sources_present["funding"]:
+                gaps.append(f"{section}:{ntype}:needs_funding")
 
     def combine(sec, default):
         all_nodes = sec.get("all") or []
@@ -319,6 +399,7 @@ def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
     lev = spec["risk"]["leverage"]
     max_frac = spec["risk"]["max_pos_frac"]
     cooldown = spec["risk"].get("cooldown_bars", 0)
+    max_hold = spec.get("exit", {}).get("max_hold_bars")
     trail = (spec.get("exit", {}).get("stops") or {}).get("trail_pct")
     hard = (spec.get("exit", {}).get("stops") or {}).get("hard_pct")
 
@@ -332,6 +413,7 @@ def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
     pos = np.zeros(len(df))
     state = 0
     bars_since_exit = 10**9
+    bars_held = 0
     entry_px = np.nan
     peak = np.nan
     rets = df["close"].pct_change().fillna(0.0).to_numpy()
@@ -343,11 +425,18 @@ def simulate(spec: dict, df: pd.DataFrame, entry_sig: pd.Series,
             bars_since_exit += 1
             if entry_sig.iloc[i] and bars_since_exit > cooldown:
                 state = 1
+                bars_held = 0
                 entry_px = closes[i]
                 peak = closes[i]
         else:
+            # The entry signal is known at close t and first earns the t->t+1
+            # return. Exiting when this reaches N therefore permits exactly N
+            # subsequent held-bar returns and no (N+1)th return.
+            bars_held += 1
             peak = max(peak, closes[i])
             exit_now = bool(exit_sig.iloc[i])
+            if max_hold is not None and bars_held >= max_hold:
+                exit_now = True
             if trail is not None and closes[i] < peak * (1 - trail):
                 exit_now = True
             if hard is not None and closes[i] < entry_px * (1 - hard):

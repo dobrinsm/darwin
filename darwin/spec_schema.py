@@ -10,7 +10,8 @@ Structure:
   "created_ts": ..., "provenance": {"mined_from": [dedup_keys...], "model": "..."},
   "asset": {"class": "crypto", "symbol": "DOGEUSDT", "tf": "1d"},
   "entry": {"all": [node...], "any": [node...]},
-  "exit":  {"all": [...], "any": [...], "stops": {"trail_pct": 0.2}},
+  "exit":  {"all": [...], "any": [...], "max_hold_bars": 24,
+             "stops": {"trail_pct": 0.2}},
   "risk":  {"leverage": 3, "max_pos_frac": 0.3, "cooldown_bars": 2},
   "direction": "long",           # long-only v1
   "confidence": 0.55             # Miner's prior; gauntlet re-scores it
@@ -42,6 +43,9 @@ NODE_TYPES: dict[str, dict] = {
     "vol_spike":          {"mult": (int, float), "lookback": int, "tf": str},
     "drawdown_from_high": {"pct": (int, float), "lookback_d": int},
     "runup_from_low":     {"pct": (int, float), "lookback_d": int},
+    # --- crypto perp positioning (realized 8h settlement rate) ---
+    "funding_above":      {"threshold": (int, float)},
+    "funding_below":      {"threshold": (int, float)},
     # --- news (finlight / alphai events on the bus) ---
     "news_sentiment_below": {"threshold": (int, float), "window_h": (int, float),
                              "min_conf": (int, float)},
@@ -92,6 +96,7 @@ _JSON_SCHEMA = {
             "properties": {
                 "all": {"type": "array", "items": {"$ref": "#/$defs/node"}},
                 "any": {"type": "array", "items": {"$ref": "#/$defs/node"}},
+                "max_hold_bars": {"type": "integer", "minimum": 1, "maximum": 500},
                 "stops": {
                     "type": "object",
                     "properties": {
@@ -131,6 +136,20 @@ _PARAM_LIMITS = {
     "tf": None, "assets": None,
 }
 
+# Parameter names are mostly shared across node families. These two limits are
+# deliberately node-specific: Binance's realized 8h funding rate is a fraction,
+# not the 0..100-style scale used by RSI and fear/greed thresholds.
+_NODE_PARAM_LIMITS = {
+    ("funding_above", "threshold"): (-0.01, 0.01),
+    ("funding_below", "threshold"): (-0.01, 0.01),
+}
+_NODE_PARAM_VALUES = {"tf": {"4h", "1d"}}
+_TIMEFRAME_RANK = {"4h": 0, "1d": 1}
+
+
+def _is_param_type(value, expected) -> bool:
+    return not isinstance(value, bool) and isinstance(value, expected)
+
 
 def _check_nodes(spec: dict, errors: list[str]) -> None:
     for section in ("entry", "exit"):
@@ -150,16 +169,29 @@ def _check_nodes(spec: dict, errors: list[str]) -> None:
                 if k not in allowed:
                     errors.append(f"{section}/{ntype}: unknown param '{k}'")
                     continue
-                if not isinstance(v, allowed[k]):
+                if not _is_param_type(v, allowed[k]):
                     errors.append(f"{section}/{ntype}: param '{k}' wrong type"
                                   f" ({type(v).__name__})")
             for k in allowed:
                 if k not in node:
                     errors.append(f"{section}/{ntype}: missing param '{k}'")
                     continue
-                lim = _PARAM_LIMITS.get(k)
+                if not _is_param_type(node[k], allowed[k]):
+                    continue
+                lim = _NODE_PARAM_LIMITS.get((ntype, k), _PARAM_LIMITS.get(k))
                 if lim and not (lim[0] <= node[k] <= lim[1]):
                     errors.append(f"{section}/{ntype}: param '{k}'={node[k]} out of range {lim}")
+                values = _NODE_PARAM_VALUES.get(k)
+                if values and node[k] not in values:
+                    errors.append(f"{section}/{ntype}: param '{k}'={node[k]!r} not in "
+                                  f"{sorted(values)}")
+            asset_tf = (spec.get("asset") or {}).get("tf")
+            node_tf = node.get("tf")
+            if asset_tf in _TIMEFRAME_RANK and isinstance(node_tf, str) \
+                    and node_tf in _TIMEFRAME_RANK \
+                    and _TIMEFRAME_RANK[node_tf] < _TIMEFRAME_RANK[asset_tf]:
+                errors.append(f"{section}/{ntype}: node tf '{node_tf}' is lower than "
+                              f"asset tf '{asset_tf}'")
 
 
 def validate_spec(spec: dict) -> list[str]:
@@ -174,7 +206,7 @@ def validate_spec(spec: dict) -> list[str]:
     for node in (spec["entry"].get("all") or []) + (spec["entry"].get("any") or []):
         if node.get("type") == "ema_cross_up":
             fast, slow = node["fast"], node["slow"]
-    if fast is not None and fast >= slow:
+    if _is_param_type(fast, int) and _is_param_type(slow, int) and fast >= slow:
         errors.append("entry/ema_cross_up: fast must be < slow")
     return errors
 
