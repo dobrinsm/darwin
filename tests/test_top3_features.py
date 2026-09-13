@@ -8,7 +8,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from darwin.engine import _node_to_bool, compile_signal, simulate
+from darwin.engine import (_node_to_bool, compile_signal,
+                           funding_entry_allowed, simulate)
 from darwin.optimizer import _spec_key, enumerate_mutations
 from darwin.spec_schema import demo_spec, validate_spec
 
@@ -138,6 +139,29 @@ def test_stale_funding_cannot_admit_an_entry():
         df, _StubContext(funding=funding))
 
     assert below.tolist() == [True, True, False]
+
+
+def test_funding_fill_guard_preserves_any_branch_semantics():
+    idx = pd.date_range("2024-01-01", periods=3, freq="4h", tz="UTC")
+    rising = _bars(idx, [1, 2, 3])
+    spec = demo_spec()
+    spec["asset"]["tf"] = "4h"
+    spec["entry"] = {"all": [], "any": [
+        {"type": "price_above_sma", "period": 2, "tf": "4h"},
+        {"type": "funding_below", "threshold": 0.0005},
+    ]}
+    high_funding = pd.Series([0.0008], index=pd.DatetimeIndex([idx[-1]]))
+
+    assert funding_entry_allowed(
+        spec, rising, _StubContext(funding=high_funding),
+        idx[-1], idx[-1].timestamp())
+
+    falling = _bars(idx, [3, 2, 1])
+    settlement_idx = pd.DatetimeIndex([idx[-1], idx[-1] + pd.Timedelta(hours=8)])
+    changing_funding = pd.Series([0.0001, 0.0008], index=settlement_idx)
+    assert not funding_entry_allowed(
+        spec, falling, _StubContext(funding=changing_funding),
+        idx[-1], settlement_idx[-1].timestamp())
 
 
 def test_missing_funding_is_false_and_reported_as_data_gap():
@@ -290,6 +314,8 @@ def test_walk_forward_preserves_hold_age_at_oos_boundary(monkeypatch):
 
 
 def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
     import darwin.arena as arena
 
     idx = pd.date_range("2024-01-01", periods=10, freq="24h", tz="UTC")
@@ -311,14 +337,18 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     current = {
         "bars": all_bars.iloc[:4], "state": initial,
         "persistent": False, "entry_indices": [], "exit_indices": [],
-        "funding_age_h": 0,
+        "cycle_offset_h": 0, "funding_events": [(0, 0.0001)],
     }
     saved = {}
 
     def fake_context(*_):
-        funding_ts = current["bars"].index[-1] - pd.Timedelta(
-            hours=current["funding_age_h"])
-        funding = pd.Series([0.0001], index=pd.DatetimeIndex([funding_ts]))
+        bar_ts = current["bars"].index[-1]
+        funding = pd.Series(
+            [rate for _, rate in current["funding_events"]],
+            index=pd.DatetimeIndex([
+                bar_ts + pd.Timedelta(hours=offset)
+                for offset, _ in current["funding_events"]
+            ]))
         return _StubContext(funding=funding)
 
     def fake_compile(_, bars, __):
@@ -337,6 +367,10 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     def fake_save(state):
         saved["state"] = copy.deepcopy(state)
 
+    monkeypatch.setattr(
+        arena, "time", SimpleNamespace(time=lambda: (
+            current["bars"].index[-1]
+            + pd.Timedelta(hours=current["cycle_offset_h"])).timestamp()))
     monkeypatch.setattr(arena, "promoted_specs", lambda: [spec])
     monkeypatch.setattr(arena, "load_klines", lambda *args: current["bars"])
     monkeypatch.setattr(arena, "Context", fake_context)
@@ -366,8 +400,8 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     closed_state = copy.deepcopy(saved["state"])
 
     current.update(state=closed_state, persistent=True,
-                   entry_indices=[], exit_indices=[], funding_age_h=0,
-                   bars=all_bars.iloc[:8])
+                   entry_indices=[], exit_indices=[], cycle_offset_h=0,
+                   funding_events=[(0, 0.0001)], bars=all_bars.iloc[:8])
     cooling_down = arena.step(object())
     assert not any(action.get("action") == "ENTRY"
                    for action in cooling_down["actions"])
@@ -379,8 +413,8 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
                for action in cooldown_complete["actions"])
 
     current.update(state=closed_state, persistent=False,
-                   entry_indices=[8], exit_indices=[7], funding_age_h=0,
-                   bars=all_bars.iloc[:9])
+                   entry_indices=[8], exit_indices=[7], cycle_offset_h=0,
+                   funding_events=[(0, 0.0001)], bars=all_bars.iloc[:9])
     replay_diverged = arena.step(object())
     assert any(action.get("action") == "ENTRY"
                for action in replay_diverged["actions"])
@@ -391,7 +425,9 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     blocked = arena.step(object())
     assert any(action.get("action") == "BLOCKED" for action in blocked["actions"])
 
-    current.update(state=saved["state"], bars=all_bars, funding_age_h=12)
+    current.update(
+        state=saved["state"], cycle_offset_h=8,
+        funding_events=[(0, 0.0001), (8, 0.0008)])
     monkeypatch.setattr(arena, "MAX_TOTAL_POSITIONS", 6)
     funding_blocked = arena.step(object())
     assert not any(action.get("action") == "ENTRY"
@@ -399,7 +435,7 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     assert any(action.get("reason") == "funding_guard"
                for action in funding_blocked["actions"])
 
-    current.update(state=saved["state"], funding_age_h=0)
+    current.update(state=saved["state"], funding_events=[(8, 0.0001)])
     retried = arena.step(object())
     assert any(action.get("action") == "ENTRY" for action in retried["actions"])
 

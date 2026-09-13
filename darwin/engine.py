@@ -166,6 +166,17 @@ class Context:
         return self._tf_cache[tf]
 
 
+def _funding_node_signal(node: dict, index: pd.DatetimeIndex,
+                         ctx: Context) -> pd.Series:
+    if ctx.funding.empty:
+        return pd.Series(False, index=index)
+    known = ctx.funding.reindex(
+        index, method="ffill", tolerance=pd.Timedelta(hours=8))
+    result = (known > node["threshold"] if node["type"] == "funding_above"
+              else known < node["threshold"])
+    return result.fillna(False)
+
+
 def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
     """Evaluate one node -> boolean Series on df.index. Point-in-time safe."""
     t = node["type"]
@@ -214,14 +225,7 @@ def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
         roll_lo = c.rolling(node["lookback_d"]).min()
         return (c / roll_lo - 1) > node["pct"]
     if t in ("funding_above", "funding_below"):
-        if ctx.funding.empty:
-            return pd.Series(False, index=idx)
-        # Realized settlement facts are indexed by settlement time. ffill at
-        # each bar close therefore reads only the latest rate already known.
-        known = ctx.funding.reindex(
-            idx, method="ffill", tolerance=pd.Timedelta(hours=8))
-        return ((known > node["threshold"]) if t == "funding_above"
-                else (known < node["threshold"])).fillna(False)
+        return _funding_node_signal(node, idx, ctx)
     if t in ("fear_greed_below", "fear_greed_above"):
         if ctx.fg.empty:
             return pd.Series(False, index=idx)
@@ -290,13 +294,29 @@ def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
     raise ValueError(f"unhandled node type {t}")
 
 
-def funding_entry_allowed(spec: dict, df: pd.DataFrame, ctx: Context) -> bool:
-    nodes = list((spec.get("entry") or {}).get("all") or [])
-    nodes += list((spec.get("entry") or {}).get("any") or [])
-    funding_nodes = [node for node in nodes
-                     if node["type"] in ("funding_above", "funding_below")]
-    return all(bool(_node_to_bool(node, df, ctx).iloc[-1])
-               for node in funding_nodes)
+def funding_entry_allowed(spec: dict, df: pd.DataFrame, ctx: Context,
+                          entry_ts: pd.Timestamp, as_of: float) -> bool:
+    entry = spec.get("entry") or {}
+    funding_types = ("funding_above", "funding_below")
+    mandatory = [node for node in entry.get("all") or []
+                 if node["type"] in funding_types]
+    now_index = pd.DatetimeIndex([pd.to_datetime(as_of, unit="s", utc=True)])
+    if not all(bool(_funding_node_signal(node, now_index, ctx).iloc[0])
+               for node in mandatory):
+        return False
+
+    any_nodes = entry.get("any") or []
+    nonfunding = [node for node in any_nodes if node["type"] not in funding_types]
+    if any(bool(_node_to_bool(node, df, ctx).loc[entry_ts])
+           for node in nonfunding):
+        return True
+
+    funding = [node for node in any_nodes if node["type"] in funding_types]
+    established = [node for node in funding
+                   if bool(_funding_node_signal(node, df.index, ctx).loc[entry_ts])]
+    return not funding or any(
+        bool(_funding_node_signal(node, now_index, ctx).iloc[0])
+        for node in established)
 
 
 def compile_signal(spec: dict, df: pd.DataFrame, ctx: Context) -> tuple[pd.Series, list[str]]:

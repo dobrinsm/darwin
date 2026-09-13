@@ -239,7 +239,7 @@ def step(bus: EventBus | None = None) -> dict:
     # ---- Phase 1: evaluate every spec -> desired position + gauntlet rank.
     # Rank = LOO sharpe of the latest report: the book fills with the most
     # robust specs first when caps bite, not in arbitrary filesystem order.
-    evals = []   # (rank, sid, spec, sym, lev, desired, time_exit, px, ts, gaps, funding_ok)
+    evals = []   # (rank, sid, spec, sym, lev, desired, time_exit, px, ts, gaps, entry_ts, df, ctx)
     for spec in live.values():
         sid = spec["spec_id"]
         sym, tf = spec["asset"]["symbol"], spec["asset"]["tf"]
@@ -252,6 +252,7 @@ def step(bus: EventBus | None = None) -> dict:
             replay_spec = copy.deepcopy(spec)
             replay_spec.get("exit", {}).pop("max_hold_bars", None)
             replay_start = live_state.get("time_exit_ts")
+            signal_entry_ts = None
             if replay_start is None:
                 _, frame = simulate(replay_spec, df, e_sig, x_sig, ctx)
                 desired = int(frame["position"].iloc[-1])
@@ -268,7 +269,10 @@ def step(bus: EventBus | None = None) -> dict:
                     desired = int(frame["position"].iloc[-1])
                 else:
                     desired = 0
-            funding_ok = funding_entry_allowed(spec, df, ctx)
+            if desired:
+                entries = ((frame["position"] == 1)
+                           & (frame["position"].shift(1, fill_value=0) == 0))
+                signal_entry_ts = frame.index[entries][-1]
         except Exception as e:
             actions.append({"spec_id": sid, "error": str(e)[:120]})
             continue
@@ -287,13 +291,13 @@ def step(bus: EventBus | None = None) -> dict:
         evals.append((loo_rank, sid, spec, sym, lev, desired, time_exit,
                       float(df["close"].iloc[-1]),
                       float(df.index[-1].timestamp()),  # type: ignore[attr-defined]
-                      gaps, funding_ok))
+                      gaps, signal_entry_ts, df, ctx))
 
     # ---- Phase 2: exits + mark-to-market + funding + freeze checks.
     # Exits are NEVER gated by book risk.
-    pending_entries = []   # (rank, sid, spec, sym, lev, px, ts, gaps, funding_ok)
+    pending_entries = []   # (rank, sid, spec, sym, lev, px, ts, gaps, entry_ts, df, ctx)
     for (loo_rank, sid, spec, sym, lev, desired, time_exit,
-         last_close, last_ts, gaps, funding_ok) in evals:
+         last_close, last_ts, gaps, signal_entry_ts, df, ctx) in evals:
         st = state.get(sid, {"in_pos": 0, "entry_px": None, "entry_ts": None,
                              "equity": START_EQ})
         # backfill: positions opened before the cost model stamped no `symbol`
@@ -342,7 +346,8 @@ def step(bus: EventBus | None = None) -> dict:
                 st["time_exit_ts"] = last_ts
         elif desired == 1 and not st.get("in_pos"):
             pending_entries.append((loo_rank, sid, spec, sym, lev,
-                                    last_close, last_ts, gaps, funding_ok))
+                                    last_close, last_ts, gaps,
+                                    signal_entry_ts, df, ctx))
         state[sid] = st
 
     # ---- Phase 3: entries under book-level caps, best-LOO first.
@@ -355,11 +360,12 @@ def step(bus: EventBus | None = None) -> dict:
         sym_count[sy] = sym_count.get(sy, 0) + 1
 
     for (loo_rank, sid, spec, sym, lev, last_close, last_ts, gaps,
-         funding_ok) in sorted(pending_entries, key=lambda e: -e[0]):
+         signal_entry_ts, df, ctx) in sorted(pending_entries, key=lambda e: -e[0]):
         st = state[sid]
         if sid in _load_frozen():
             continue
-        if not funding_ok:
+        if not funding_entry_allowed(
+                spec, df, ctx, signal_entry_ts, time.time()):
             reason = "funding entry predicate false or unavailable"
             _log_blocked_once(sid, spec, sym, last_ts, reason)
             actions.append({"spec_id": sid, "action": "BLOCKED",
