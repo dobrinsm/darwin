@@ -63,22 +63,23 @@ orchestrator.py   the heartbeat (designed for systemd timer, every 15 min)
 digest.py         daily Telegram-ready summary
 ```
 
-## Node vocabulary (what the Miner can compose)
+## Strategy contract
 
-`price_above_sma` · `ema_cross_up/down` · `rsi_below/above` · `vol_spike` ·
-`drawdown_from_high` · `runup_from_low` · `funding_above/below` ·
-`fear_greed_below/above` · `wsb_rank_above` · `news_sentiment_below/above` ·
-`convergence` (smart money) · `cross_asset_score` (equities/FX/gold momentum vote) ·
-`iv_skew_above` (reserved)
+The authoritative spec shape, node vocabulary, and validation rules live in
+[`darwin/spec_schema.py`](darwin/spec_schema.py); `demo_spec()` provides a
+minimal valid example.
 
-TA nodes declare their own `tf` (`4h` or `1d`), so a 4h trigger can be gated by
-an already-closed daily regime without lookahead. Entry funding nodes and
-higher-timeframe SMA nodes are persistent gates: `entry.all` gates must still
-pass if a fill is delayed, while `entry.any` preserves alternative-branch
-semantics. Specs can also set optional `exit.max_hold_bars` to cap slow-bleed
-position age. Existing specs that omit it retain signal/stop-only exits.
+A TA node's timeframe must match or be higher than the asset timeframe. This
+allows an already-closed daily regime to gate a 4h trigger without lookahead,
+but forbids 4h nodes in daily strategies. Funding predicates use the latest
+realized eight-hour Binance settlement and evaluate false when it is more than
+eight hours old or unavailable.
 
-A spec example lives in `spec_schema.demo_spec()`.
+Entry funding nodes and higher-timeframe SMA nodes are persistent gates at the
+arena fill boundary: `entry.all` gates must still pass if a fill is delayed,
+while `entry.any` preserves alternative-branch semantics. The optional
+`exit.max_hold_bars` caps position age in asset-timeframe bars from the actual
+fill; specs that omit it retain signal/stop-only exits.
 
 ## Setup
 

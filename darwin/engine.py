@@ -3,10 +3,13 @@
 Point-in-time rules (the invariants):
 1. Signals are computed on bar closes; the position acts on the NEXT bar
    (position.shift(1)) — no lookahead, ever.
-2. Event nodes (sentiment, wsb, fear-greed, convergence) read the bus with
-   as_of = bar close time. The bus only ever returns events with ts <= as_of.
+2. Event nodes (funding, sentiment, WSB, fear-greed, convergence) use only
+   events with ts <= the decision time; funding predicates also reject
+   settlements more than eight hours old.
 3. Cross-timeframe nodes use bars whose close_ts <= the decision bar's close_ts.
-4. Same inputs -> same outputs. No I/O during the run after materialization.
+4. Delayed arena entries revalidate funding and higher-timeframe SMA gates at
+   the actual fill boundary, preserving the entry expression's Boolean logic.
+5. Same inputs -> same outputs. No I/O during the run after materialization.
 """
 from __future__ import annotations
 

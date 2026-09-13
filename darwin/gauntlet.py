@@ -2,7 +2,7 @@
 
 Full-sample compile+simulate, then WALK-FORWARD: rolling 12mo in-sample /
 6mo out-of-sample windows. Verdict per spec:
-  PROMOTE   — OOS sharpe >= 0.5, positive OOS compound, win rate >= 40%
+  PROMOTE   — OOS sharpe >= 0.5 and positive OOS compound
   MUTATE    — promising but needs param search (queued for optimizer)
   KILL      — fails OOS bars
 Verdicts and metrics are written to runs/<spec_id>/report.json.
