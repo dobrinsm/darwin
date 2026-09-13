@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.request
 from pathlib import Path
 
@@ -71,7 +72,7 @@ def bus_snapshot(bus: EventBus) -> str:
                          f"ann.vol={vol:.0f}% dd-from-365d-high={ath_dd*100:+.1f}%")
             funding = bus.read(event_type="funding", source="binance",
                                symbol=sym.replace("USDT", ""), limit=90)
-            if funding:
+            if funding and 0 <= time.time() - funding[0].ts <= 8 * 3600:
                 rates = [float(e.payload.get("rate") or 0.0) for e in funding]
                 latest = rates[0]
                 avg = sum(rates) / len(rates)
@@ -357,7 +358,6 @@ def mine(bus: EventBus | None = None) -> dict:
                       "thesis": (pr.get("provenance") or {}).get("thesis", "")})
     log_path = Path(__file__).resolve().parent.parent / "data" / "miner_log.jsonl"
     with log_path.open("a") as f:
-        import time
         f.write(json.dumps({"ts": time.time(), "model": MODEL,
                             "saved": saved, "rejected": rejected}) + "\n")
     return {"saved": saved, "rejected": rejected, "snapshot": snapshot}

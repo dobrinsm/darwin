@@ -239,7 +239,7 @@ def step(bus: EventBus | None = None) -> dict:
     # ---- Phase 1: evaluate every spec -> desired position + gauntlet rank.
     # Rank = LOO sharpe of the latest report: the book fills with the most
     # robust specs first when caps bite, not in arbitrary filesystem order.
-    evals = []   # (rank, sid, spec, sym, lev, desired, entry_now, time_exit, px, ts, gaps)
+    evals = []   # (rank, sid, spec, sym, lev, desired, entry_ready, time_exit, px, ts, gaps)
     for spec in live.values():
         sid = spec["spec_id"]
         sym, tf = spec["asset"]["symbol"], spec["asset"]["tf"]
@@ -261,13 +261,20 @@ def step(bus: EventBus | None = None) -> dict:
                 loo_rank = float(json.loads(rep_p.read_text()).get("oos_loo_sharpe") or 0)
             except Exception:
                 pass
-        entry_ts = (state.get(sid) or {}).get("entry_ts")
+        live_state = state.get(sid) or {}
+        entry_ts = live_state.get("entry_ts")
         max_hold = (spec.get("exit") or {}).get("max_hold_bars")
         bars_held = 0 if entry_ts is None else int(
             (df.index > pd.to_datetime(entry_ts, unit="s", utc=True)).sum())
         time_exit = max_hold is not None and bars_held >= max_hold
+        time_exit_ts = live_state.get("time_exit_ts")
+        bars_since_exit = 0 if time_exit_ts is None else int(
+            (df.index > pd.to_datetime(time_exit_ts, unit="s", utc=True)).sum())
+        cooldown = spec["risk"].get("cooldown_bars", 0)
+        entry_ready = time_exit_ts is None or (
+            bool(e_sig.iloc[-1]) and bars_since_exit > cooldown)
         evals.append((loo_rank, sid, spec, sym, lev,
-                      int(frame["position"].iloc[-1]), bool(e_sig.iloc[-1]),
+                      int(frame["position"].iloc[-1]), entry_ready,
                       time_exit, float(df["close"].iloc[-1]),
                       float(df.index[-1].timestamp()),  # type: ignore[attr-defined]
                       gaps))
@@ -275,7 +282,7 @@ def step(bus: EventBus | None = None) -> dict:
     # ---- Phase 2: exits + mark-to-market + funding + freeze checks.
     # Exits are NEVER gated by book risk.
     pending_entries = []   # (loo_rank, sid, spec, sym, lev, last_close, last_ts, gaps)
-    for (loo_rank, sid, spec, sym, lev, desired, entry_now, time_exit,
+    for (loo_rank, sid, spec, sym, lev, desired, entry_ready, time_exit,
          last_close, last_ts, gaps) in evals:
         st = state.get(sid, {"in_pos": 0, "entry_px": None, "entry_ts": None,
                              "equity": START_EQ})
@@ -323,11 +330,10 @@ def step(bus: EventBus | None = None) -> dict:
                       unrealized=0.0, mark=last_close)
             if time_exit:
                 st["time_exit_ts"] = last_ts
-        elif desired == 1 and not st.get("in_pos"):
-            time_exit_ts = st.get("time_exit_ts")
-            if time_exit_ts is None or (last_ts > time_exit_ts and entry_now):
-                pending_entries.append((loo_rank, sid, spec, sym, lev,
-                                        last_close, last_ts, gaps))
+        elif desired == 1 and not st.get("in_pos") and entry_ready:
+            st["time_exit_ts"] = None
+            pending_entries.append((loo_rank, sid, spec, sym, lev,
+                                    last_close, last_ts, gaps))
         state[sid] = st
 
     # ---- Phase 3: entries under book-level caps, best-LOO first.

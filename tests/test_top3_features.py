@@ -75,6 +75,21 @@ def test_schema_rejects_bad_funding_timeframe_and_hold_ranges():
     assert any("max_hold_bars" in error for error in validate_spec(hold_spec))
 
 
+def test_schema_reports_malformed_node_params_without_raising():
+    funding_spec = demo_spec()
+    funding_spec["entry"]["all"].append(
+        {"type": "funding_below", "threshold": "0.0003"})
+    funding_errors = validate_spec(funding_spec)
+    assert any("funding_below" in error and "wrong type" in error
+               for error in funding_errors)
+
+    tf_spec = demo_spec()
+    tf_spec["entry"]["all"][0]["tf"] = ["1d"]
+    tf_errors = validate_spec(tf_spec)
+    assert any("ema_cross_up" in error and "wrong type" in error
+               for error in tf_errors)
+
+
 # ------------------------------------------------------------- funding nodes
 def test_funding_nodes_use_only_latest_known_settlement():
     idx = pd.DatetimeIndex([
@@ -130,6 +145,34 @@ def test_missing_funding_is_false_and_reported_as_data_gap():
     entry, _, gaps = compile_signal(spec, df, ctx)
     assert not entry.any()
     assert gaps == ["entry:funding_below:needs_funding"]
+
+
+def test_miner_snapshot_omits_stale_funding(monkeypatch):
+    from types import SimpleNamespace
+
+    import darwin.miner as miner
+
+    now = pd.Timestamp("2024-06-01", tz="UTC").timestamp()
+    idx = pd.date_range("2023-01-01", periods=400, freq="24h", tz="UTC")
+    bars = _bars(idx, np.linspace(100, 200, len(idx)))
+
+    class Bus:
+        funding = []
+
+        def read(self, event_type=None, **_):
+            return self.funding if event_type == "funding" else []
+
+    bus = Bus()
+    monkeypatch.setattr(miner, "load_klines", lambda *args: bars)
+    monkeypatch.setattr(miner, "time", SimpleNamespace(time=lambda: now))
+
+    bus.funding = [SimpleNamespace(
+        ts=now - 9 * 3600, payload={"rate": "0.0001"})]
+    assert "FUNDING:" not in miner.bus_snapshot(bus)
+
+    bus.funding = [SimpleNamespace(
+        ts=now - 8 * 3600, payload={"rate": "0.0001"})]
+    assert "FUNDING:" in miner.bus_snapshot(bus)
 
 
 # ------------------------------------------------------ multi-timeframe gates
@@ -239,14 +282,15 @@ def test_walk_forward_preserves_hold_age_at_oos_boundary(monkeypatch):
     assert report["walk_forward"][0]["oos"]["exposure"] == 10.4
 
 
-def test_arena_times_exit_from_live_fill(monkeypatch, tmp_path):
+def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     import darwin.arena as arena
 
-    idx = pd.date_range("2024-01-01", periods=7, freq="24h", tz="UTC")
+    idx = pd.date_range("2024-01-01", periods=10, freq="24h", tz="UTC")
     all_bars = _bars(idx, np.full(len(idx), 100.0))
     spec = demo_spec()
     spec["spec_id"] = "spec_live_hold"
     spec["exit"] = {"any": [], "max_hold_bars": 3, "stops": {}}
+    spec["risk"]["cooldown_bars"] = 2
     initial = {
         spec["spec_id"]: {
             "in_pos": 1, "entry_px": 100.0,
@@ -255,12 +299,18 @@ def test_arena_times_exit_from_live_fill(monkeypatch, tmp_path):
             "funding_trade": 0.0, "last_funding_ts": float(idx[2].timestamp()),
         }
     }
-    current = {"bars": all_bars.iloc[:4], "state": initial}
+    current = {
+        "bars": all_bars.iloc[:4], "state": initial,
+        "persistent": False, "entry_last": False,
+    }
     saved = {}
 
     def fake_compile(_, bars, __):
-        entry = pd.Series(False, index=bars.index)
-        entry.iloc[0] = True
+        entry = pd.Series(current["persistent"], index=bars.index)
+        if not current["persistent"]:
+            entry.iloc[0] = True
+        if current["entry_last"]:
+            entry.iloc[-1] = True
         return entry, pd.Series(False, index=bars.index), []
 
     def fake_save(state):
@@ -276,6 +326,7 @@ def test_arena_times_exit_from_live_fill(monkeypatch, tmp_path):
     monkeypatch.setattr(arena, "_save_frozen", lambda _: None)
     monkeypatch.setattr(arena, "_funding_since", lambda *args: [])
     monkeypatch.setattr(arena, "_log_trade", lambda _: None)
+    monkeypatch.setattr(arena, "_log_blocked_once", lambda *args: None)
     monkeypatch.setattr(arena, "EQUITY_P", tmp_path / "equity.jsonl")
 
     before_limit = arena.step(object())
@@ -291,6 +342,31 @@ def test_arena_times_exit_from_live_fill(monkeypatch, tmp_path):
     after_limit = arena.step(object())
     assert not any(action.get("action") == "ENTRY" for action in after_limit["actions"])
     assert spec["spec_id"] not in after_limit["positions"]
+    closed_state = copy.deepcopy(saved["state"])
+
+    current.update(state=closed_state, persistent=True, entry_last=False,
+                   bars=all_bars.iloc[:8])
+    cooling_down = arena.step(object())
+    assert not any(action.get("action") == "ENTRY"
+                   for action in cooling_down["actions"])
+
+    current["state"] = saved["state"]
+    current["bars"] = all_bars.iloc[:9]
+    cooldown_complete = arena.step(object())
+    assert any(action.get("action") == "ENTRY"
+               for action in cooldown_complete["actions"])
+
+    current.update(state=closed_state, persistent=False, entry_last=True,
+                   bars=all_bars.iloc[:9])
+    monkeypatch.setattr(arena, "MAX_TOTAL_POSITIONS", 0)
+    blocked = arena.step(object())
+    assert any(action.get("action") == "BLOCKED" for action in blocked["actions"])
+    assert saved["state"][spec["spec_id"]]["time_exit_ts"] is None
+
+    current.update(state=saved["state"], entry_last=False, bars=all_bars)
+    monkeypatch.setattr(arena, "MAX_TOTAL_POSITIONS", 6)
+    retried = arena.step(object())
+    assert any(action.get("action") == "ENTRY" for action in retried["actions"])
 
 
 # -------------------------------------------------------------- optimizer

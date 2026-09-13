@@ -172,6 +172,8 @@ def _check_nodes(spec: dict, errors: list[str]) -> None:
                 if k not in node:
                     errors.append(f"{section}/{ntype}: missing param '{k}'")
                     continue
+                if not isinstance(node[k], allowed[k]):
+                    continue
                 lim = _NODE_PARAM_LIMITS.get((ntype, k), _PARAM_LIMITS.get(k))
                 if lim and not (lim[0] <= node[k] <= lim[1]):
                     errors.append(f"{section}/{ntype}: param '{k}'={node[k]} out of range {lim}")
@@ -181,7 +183,8 @@ def _check_nodes(spec: dict, errors: list[str]) -> None:
                                   f"{sorted(values)}")
             asset_tf = (spec.get("asset") or {}).get("tf")
             node_tf = node.get("tf")
-            if asset_tf in _TIMEFRAME_RANK and node_tf in _TIMEFRAME_RANK \
+            if asset_tf in _TIMEFRAME_RANK and isinstance(node_tf, str) \
+                    and node_tf in _TIMEFRAME_RANK \
                     and _TIMEFRAME_RANK[node_tf] < _TIMEFRAME_RANK[asset_tf]:
                 errors.append(f"{section}/{ntype}: node tf '{node_tf}' is lower than "
                               f"asset tf '{asset_tf}'")
@@ -199,7 +202,7 @@ def validate_spec(spec: dict) -> list[str]:
     for node in (spec["entry"].get("all") or []) + (spec["entry"].get("any") or []):
         if node.get("type") == "ema_cross_up":
             fast, slow = node["fast"], node["slow"]
-    if fast is not None and fast >= slow:
+    if isinstance(fast, int) and isinstance(slow, int) and fast >= slow:
         errors.append("entry/ema_cross_up: fast must be < slow")
     return errors
 
