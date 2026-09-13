@@ -290,6 +290,15 @@ def _node_to_bool(node: dict, df: pd.DataFrame, ctx: Context) -> pd.Series:
     raise ValueError(f"unhandled node type {t}")
 
 
+def funding_entry_allowed(spec: dict, df: pd.DataFrame, ctx: Context) -> bool:
+    nodes = list((spec.get("entry") or {}).get("all") or [])
+    nodes += list((spec.get("entry") or {}).get("any") or [])
+    funding_nodes = [node for node in nodes
+                     if node["type"] in ("funding_above", "funding_below")]
+    return all(bool(_node_to_bool(node, df, ctx).iloc[-1])
+               for node in funding_nodes)
+
+
 def compile_signal(spec: dict, df: pd.DataFrame, ctx: Context) -> tuple[pd.Series, list[str]]:
     """Return boolean entry/exit Series + list of data gaps found."""
     gaps = []

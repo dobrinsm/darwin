@@ -89,6 +89,13 @@ def test_schema_reports_malformed_node_params_without_raising():
     assert any("ema_cross_up" in error and "wrong type" in error
                for error in tf_errors)
 
+    bool_spec = demo_spec()
+    bool_spec["entry"]["all"].append(
+        {"type": "funding_below", "threshold": False})
+    bool_errors = validate_spec(bool_spec)
+    assert any("funding_below" in error and "wrong type" in error
+               for error in bool_errors)
+
 
 # ------------------------------------------------------------- funding nodes
 def test_funding_nodes_use_only_latest_known_settlement():
@@ -289,6 +296,8 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     all_bars = _bars(idx, np.full(len(idx), 100.0))
     spec = demo_spec()
     spec["spec_id"] = "spec_live_hold"
+    spec["entry"]["all"].append(
+        {"type": "funding_below", "threshold": 0.0005})
     spec["exit"] = {"any": [], "max_hold_bars": 3, "stops": {}}
     spec["risk"]["cooldown_bars"] = 2
     initial = {
@@ -301,24 +310,36 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     }
     current = {
         "bars": all_bars.iloc[:4], "state": initial,
-        "persistent": False, "entry_last": False,
+        "persistent": False, "entry_indices": [], "exit_indices": [],
+        "funding_age_h": 0,
     }
     saved = {}
+
+    def fake_context(*_):
+        funding_ts = current["bars"].index[-1] - pd.Timedelta(
+            hours=current["funding_age_h"])
+        funding = pd.Series([0.0001], index=pd.DatetimeIndex([funding_ts]))
+        return _StubContext(funding=funding)
 
     def fake_compile(_, bars, __):
         entry = pd.Series(current["persistent"], index=bars.index)
         if not current["persistent"]:
             entry.iloc[0] = True
-        if current["entry_last"]:
-            entry.iloc[-1] = True
-        return entry, pd.Series(False, index=bars.index), []
+        for position in current["entry_indices"]:
+            if position < len(entry):
+                entry.iloc[position] = True
+        exit_ = pd.Series(False, index=bars.index)
+        for position in current["exit_indices"]:
+            if position < len(exit_):
+                exit_.iloc[position] = True
+        return entry, exit_, []
 
     def fake_save(state):
         saved["state"] = copy.deepcopy(state)
 
     monkeypatch.setattr(arena, "promoted_specs", lambda: [spec])
     monkeypatch.setattr(arena, "load_klines", lambda *args: current["bars"])
-    monkeypatch.setattr(arena, "Context", lambda *args: object())
+    monkeypatch.setattr(arena, "Context", fake_context)
     monkeypatch.setattr(arena, "compile_signal", fake_compile)
     monkeypatch.setattr(arena, "_load_state", lambda: copy.deepcopy(current["state"]))
     monkeypatch.setattr(arena, "_save_state", fake_save)
@@ -344,7 +365,8 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     assert spec["spec_id"] not in after_limit["positions"]
     closed_state = copy.deepcopy(saved["state"])
 
-    current.update(state=closed_state, persistent=True, entry_last=False,
+    current.update(state=closed_state, persistent=True,
+                   entry_indices=[], exit_indices=[], funding_age_h=0,
                    bars=all_bars.iloc[:8])
     cooling_down = arena.step(object())
     assert not any(action.get("action") == "ENTRY"
@@ -356,15 +378,28 @@ def test_arena_times_exit_and_reentry_from_live_state(monkeypatch, tmp_path):
     assert any(action.get("action") == "ENTRY"
                for action in cooldown_complete["actions"])
 
-    current.update(state=closed_state, persistent=False, entry_last=True,
+    current.update(state=closed_state, persistent=False,
+                   entry_indices=[8], exit_indices=[7], funding_age_h=0,
+                   bars=all_bars.iloc[:9])
+    replay_diverged = arena.step(object())
+    assert any(action.get("action") == "ENTRY"
+               for action in replay_diverged["actions"])
+
+    current.update(state=closed_state, entry_indices=[8], exit_indices=[],
                    bars=all_bars.iloc[:9])
     monkeypatch.setattr(arena, "MAX_TOTAL_POSITIONS", 0)
     blocked = arena.step(object())
     assert any(action.get("action") == "BLOCKED" for action in blocked["actions"])
-    assert saved["state"][spec["spec_id"]]["time_exit_ts"] is None
 
-    current.update(state=saved["state"], entry_last=False, bars=all_bars)
+    current.update(state=saved["state"], bars=all_bars, funding_age_h=12)
     monkeypatch.setattr(arena, "MAX_TOTAL_POSITIONS", 6)
+    funding_blocked = arena.step(object())
+    assert not any(action.get("action") == "ENTRY"
+                   for action in funding_blocked["actions"])
+    assert any(action.get("reason") == "funding_guard"
+               for action in funding_blocked["actions"])
+
+    current.update(state=saved["state"], funding_age_h=0)
     retried = arena.step(object())
     assert any(action.get("action") == "ENTRY" for action in retried["actions"])
 

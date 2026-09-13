@@ -147,6 +147,10 @@ _NODE_PARAM_VALUES = {"tf": {"4h", "1d"}}
 _TIMEFRAME_RANK = {"4h": 0, "1d": 1}
 
 
+def _is_param_type(value, expected) -> bool:
+    return not isinstance(value, bool) and isinstance(value, expected)
+
+
 def _check_nodes(spec: dict, errors: list[str]) -> None:
     for section in ("entry", "exit"):
         sec = spec.get(section) or {}
@@ -165,14 +169,14 @@ def _check_nodes(spec: dict, errors: list[str]) -> None:
                 if k not in allowed:
                     errors.append(f"{section}/{ntype}: unknown param '{k}'")
                     continue
-                if not isinstance(v, allowed[k]):
+                if not _is_param_type(v, allowed[k]):
                     errors.append(f"{section}/{ntype}: param '{k}' wrong type"
                                   f" ({type(v).__name__})")
             for k in allowed:
                 if k not in node:
                     errors.append(f"{section}/{ntype}: missing param '{k}'")
                     continue
-                if not isinstance(node[k], allowed[k]):
+                if not _is_param_type(node[k], allowed[k]):
                     continue
                 lim = _NODE_PARAM_LIMITS.get((ntype, k), _PARAM_LIMITS.get(k))
                 if lim and not (lim[0] <= node[k] <= lim[1]):
@@ -202,7 +206,7 @@ def validate_spec(spec: dict) -> list[str]:
     for node in (spec["entry"].get("all") or []) + (spec["entry"].get("any") or []):
         if node.get("type") == "ema_cross_up":
             fast, slow = node["fast"], node["slow"]
-    if isinstance(fast, int) and isinstance(slow, int) and fast >= slow:
+    if _is_param_type(fast, int) and _is_param_type(slow, int) and fast >= slow:
         errors.append("entry/ema_cross_up: fast must be < slow")
     return errors
 
