@@ -68,7 +68,13 @@ def main():
         try:
             lines = []
             for p in sorted(SPEC_DIR.glob("*.json")):
-                rep = run_spec(bus, load_spec(p.stem))
+                try:
+                    spec = load_spec(p.stem)
+                except Exception as e:
+                    # corrupt/truncated spec file must not abort the whole gauntlet
+                    log(f"gauntlet: SKIP {p.stem} ({e})")
+                    continue
+                rep = run_spec(bus, spec)
                 lines.append(f"{rep['verdict']:8} {rep['spec_id']} {rep['name'][:38]}"
                              f" oos={rep['avg_oos_sharpe']:+.2f}")
                 log(f"gauntlet: {lines[-1]}")
