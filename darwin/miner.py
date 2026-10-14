@@ -106,7 +106,10 @@ def bus_snapshot(bus: EventBus) -> str:
 def existing_summary() -> str:
     out = []
     for p in SPEC_DIR.glob("*.json"):
-        s = json.loads(p.read_text())
+        try:
+            s = json.loads(p.read_text())
+        except Exception:
+            continue  # truncated/empty spec file — skip, don't wedge mining
         nodes = [n["type"] for n in (s["entry"].get("all") or []) + (s["entry"].get("any") or [])]
         out.append(f"  - '{s['name']}' on {s['asset']['symbol']}: entry={nodes}")
     return "\n".join(out) or "  (none yet)"

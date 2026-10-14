@@ -227,7 +227,11 @@ def save_spec(spec: dict) -> Path:
     spec["checksum"] = hashlib.sha256(body.encode()).hexdigest()[:16]
     SPEC_DIR.mkdir(parents=True, exist_ok=True)
     p = SPEC_DIR / f"{spec['spec_id']}.json"
-    p.write_text(json.dumps(spec, indent=1))
+    # atomic write: ENOSPC mid-save must not leave a 0-byte spec that wedges
+    # existing_summary() (and thus every mining cycle) with JSONDecodeError
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(spec, indent=1))
+    tmp.replace(p)
     return p
 
 
