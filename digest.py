@@ -19,7 +19,10 @@ def main():
     counts = {"PROMOTE": 0, "MUTATE": 0, "KILL": 0}
     champion, ch_rep = None, None
     for p in RUNS.glob("*/report.json"):
-        rep = json.loads(p.read_text())
+        try:
+            rep = json.loads(p.read_text())
+        except Exception:
+            continue  # truncated/corrupt report — skip, don't kill the digest
         v = rep.get("verdict")
         if v in counts:
             counts[v] += 1

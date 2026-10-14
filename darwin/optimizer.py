@@ -346,7 +346,10 @@ def mutate_queue(bus: EventBus) -> list[dict]:
         rep_p = RUNS_DIR / p.stem / "report.json"
         if not rep_p.exists():
             continue
-        rep = json.loads(rep_p.read_text())
+        try:
+            rep = json.loads(rep_p.read_text())
+        except Exception:
+            continue  # truncated/corrupt report — not a MUTATE candidate
         if rep.get("verdict") == "MUTATE" and now - rep.get("ran_at", 0) < 36 * 3600:
             out.append(load_spec(p.stem))
     return out

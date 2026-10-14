@@ -107,7 +107,10 @@ def promoted_specs() -> list[dict]:
         rep_p = Path(__file__).resolve().parent.parent / "runs" / p.stem / "report.json"
         if not rep_p.exists():
             continue
-        rep = json.loads(rep_p.read_text())
+        try:
+            rep = json.loads(rep_p.read_text())
+        except Exception:
+            continue  # truncated/corrupt report — treat as not promoted
         if rep.get("verdict") != "PROMOTE" or now - rep.get("ran_at", 0) >= STALE_HOURS * 3600:
             continue
         if rep.get("oos_loo_sharpe", 0) < MIN_LOO:

@@ -117,7 +117,11 @@ def run_spec(bus: EventBus, spec: dict, start: str = "2020-01-01") -> dict:
     report = evaluate_spec(bus, spec, start=start)
     out = RUNS_DIR / spec["spec_id"]
     out.mkdir(parents=True, exist_ok=True)
-    (out / "report.json").write_text(json.dumps(report, indent=1))
+    # atomic write: a crash/ENOSPC mid-write must never leave a truncated
+    # report.json behind (a half-written file breaks every json.loads consumer)
+    tmp = out / "report.json.tmp"
+    tmp.write_text(json.dumps(report, indent=1))
+    tmp.replace(out / "report.json")
     return report
 
 

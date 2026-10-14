@@ -44,8 +44,14 @@ def main():
     now = time.gmtime()
     day = time.strftime("%Y-%m-%d", time.gmtime())
     mine_flag = DATA + "/last_mine.txt"
-    do_mine = (now.tm_hour == 4 and now.tm_min >= 10) or \
-              (not __import__("pathlib").Path(mine_flag).exists())
+    # mine when in the daily window, or when the flag is stale/missing (catch-up
+    # after a failed or skipped day — flag content, not existence, is the truth)
+    flag_stale = True
+    try:
+        flag_stale = pathlib.Path(mine_flag).read_text().strip() != day
+    except OSError:
+        pass
+    do_mine = (now.tm_hour == 4 and now.tm_min >= 10) or flag_stale
     if do_mine:
         try:
             out = mine(bus)
