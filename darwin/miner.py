@@ -300,8 +300,17 @@ def _call_llm(prompt: str) -> str:
     req = urllib.request.Request(
         "https://openrouter.ai/api/v1/chat/completions", data=body,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read().decode())["choices"][0]["message"]["content"]
+    # OpenRouter occasionally returns an empty/error body on a 200 — one
+    # empty response must not kill the whole mining day (transient 2026-10-14)
+    last_err: Exception = RuntimeError("no attempt")
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read().decode())["choices"][0]["message"]["content"]
+        except Exception as e:  # URLError, timeout, empty body, JSONDecodeError
+            last_err = e
+            time.sleep(20)
+    raise last_err
 
 
 def _parse_array(text: str) -> list[dict]:
