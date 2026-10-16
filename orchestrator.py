@@ -51,7 +51,15 @@ def main():
         flag_stale = pathlib.Path(mine_flag).read_text().strip() != day
     except OSError:
         pass
-    do_mine = (now.tm_hour == 4 and now.tm_min >= 10) or flag_stale
+    in_window = now.tm_hour == 4 and now.tm_min >= 10
+    # Mine once per day. On a normal day hold off until the 04:10-04:59
+    # window (daily feeds are fresh by then); once past the window catch up
+    # immediately even if late (window missed = service/ticker was down).
+    # NOTE: the old `in_window or flag_stale` form re-mined on every window
+    # tick AND again right after midnight (the flag is legitimately
+    # yesterday's until the day's cycle runs) -> 4 mining+gauntlet runs/day
+    # and the frozen-spec unfreeze/re-freeze churn that spammed the digest.
+    do_mine = flag_stale and (in_window or now.tm_hour >= 5)
     if do_mine:
         try:
             out = mine(bus)
@@ -83,9 +91,19 @@ def main():
             # unfrozen re-judged specs: a frozen spec that re-judges PROMOTE
             # with LOO >= MIN_LOO earns its way back into the arena
             try:
-                from darwin.arena import _load_frozen, unfreeze, MIN_LOO
+                from darwin.arena import (_load_frozen, unfreeze, MIN_LOO,
+                                          FREEZE_EQUITY)
                 fr = _load_frozen()
                 for sid in list(fr):
+                    # A frozen spec holds no positions, so its paper equity
+                    # is static — one still below FREEZE_EQUITY would be
+                    # re-frozen by the arena on this very tick. Unfreezing
+                    # anyway only ping-ponged the FROZEN trade-log row and
+                    # the frozen_specs.json timestamp on every gauntlet run.
+                    # The second chance still fires for any spec whose
+                    # equity has recovered to the bar.
+                    if fr.get(sid, {}).get("equity", 0.0) < FREEZE_EQUITY:
+                        continue
                     rep_p = pathlib.Path(f"/root/darwin/runs/{sid}/report.json")
                     if rep_p.exists():
                         rep = json.loads(rep_p.read_text())
